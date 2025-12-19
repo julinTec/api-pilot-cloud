@@ -17,26 +17,33 @@ interface EskolareConfig {
 async function testConnection(baseUrl: string, token: string): Promise<{ success: boolean; data?: any; error?: string }> {
   try {
     const url = `${baseUrl}/whoami/`;
-    console.log(`Testing connection: ${url}`);
+    console.log(`[TEST] Testing connection to: ${url}`);
+    console.log(`[TEST] Token format: Bearer ${token.substring(0, 10)}...${token.substring(token.length - 5)}`);
     
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    console.log(`[TEST] Request headers:`, JSON.stringify(headers, null, 2));
+    
+    const response = await fetch(url, { headers });
+
+    console.log(`[TEST] Response status: ${response.status}`);
+    console.log(`[TEST] Response headers:`, JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2));
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Connection test failed: ${response.status} - ${errorText}`);
-      return { success: false, error: `HTTP ${response.status}: ${errorText}` };
+      console.error(`[TEST] Connection test failed: ${response.status}`);
+      console.error(`[TEST] Error body: ${errorText.substring(0, 500)}`);
+      return { success: false, error: `HTTP ${response.status}: ${errorText.substring(0, 200)}` };
     }
 
     const data = await response.json();
-    console.log('Connection test successful:', data);
+    console.log('[TEST] Connection test successful:', JSON.stringify(data, null, 2));
     return { success: true, data };
   } catch (error: any) {
-    console.error('Connection test error:', error);
+    console.error('[TEST] Connection test exception:', error);
     return { success: false, error: error.message };
   }
 }
@@ -52,27 +59,31 @@ async function fetchWithPagination(
   const limit = 100;
   let hasMore = true;
 
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+
   // Dashboard endpoint returns a single object, not a list
   if (path.includes('dashboard')) {
     const url = `${baseUrl}${path}`;
-    console.log(`Fetching dashboard: ${url}`);
+    console.log(`[FETCH] Dashboard URL: ${url}`);
+    console.log(`[FETCH] Headers:`, JSON.stringify(headers, null, 2));
     
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    const response = await fetch(url, { headers });
+    
+    console.log(`[FETCH] Dashboard response status: ${response.status}`);
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`API Error ${response.status}: ${errorText}`);
+      console.error(`[FETCH] Dashboard error: ${response.status} - ${errorText.substring(0, 300)}`);
+      throw new Error(`API Error ${response.status}: ${errorText.substring(0, 200)}`);
     }
 
     const data = await response.json();
-    console.log(`Dashboard response keys:`, Object.keys(data));
+    console.log(`[FETCH] Dashboard response keys:`, Object.keys(data));
     
-    // Dashboard returns an object with 'data' containing the summary
     const dashboardData = data.data || data;
     return { data: [dashboardData], isList: false };
   }
@@ -80,45 +91,43 @@ async function fetchWithPagination(
   // Regular paginated endpoints
   while (hasMore) {
     const url = `${baseUrl}${path}?limit=${limit}&offset=${offset}`;
-    console.log(`Fetching: ${url}`);
+    console.log(`[FETCH] Paginated URL: ${url}`);
     
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    const response = await fetch(url, { headers });
+    
+    console.log(`[FETCH] Response status for ${path}: ${response.status}`);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`API Error for ${path}: ${response.status} - ${errorText}`);
-      throw new Error(`API Error ${response.status}: ${errorText}`);
+      console.error(`[FETCH] API Error for ${path}: ${response.status}`);
+      console.error(`[FETCH] Error body: ${errorText.substring(0, 500)}`);
+      throw new Error(`Endpoint ${path} retornou erro ${response.status}: ${errorText.substring(0, 100)}`);
     }
 
     const data = await response.json();
-    console.log(`Response for ${path}: count=${data.count}, keys=${Object.keys(data)}`);
+    console.log(`[FETCH] Response for ${path}: count=${data.count}, keys=${Object.keys(data)}`);
     
-    // Try to get results from the specified path or common alternatives
     const results = data[responseDataPath] || data.results || data.data || [];
     
     if (!Array.isArray(results)) {
-      console.log(`Response is not an array, treating as single item`);
+      console.log(`[FETCH] Response is not an array, treating as single item`);
       allData.push(results);
       hasMore = false;
     } else if (results.length === 0) {
+      console.log(`[FETCH] No more results for ${path}`);
       hasMore = false;
     } else {
       allData.push(...results);
       offset += limit;
+      console.log(`[FETCH] Fetched ${results.length} records, total: ${allData.length}`);
       
-      // Check if we've reached the end
       if (results.length < limit || (data.count && allData.length >= data.count)) {
         hasMore = false;
       }
     }
   }
 
-  console.log(`Total fetched for ${path}: ${allData.length} records`);
+  console.log(`[FETCH] Total fetched for ${path}: ${allData.length} records`);
   return { data: allData, isList: true };
 }
 

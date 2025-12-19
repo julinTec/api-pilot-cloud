@@ -10,6 +10,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Plug, RefreshCw, Settings, CheckCircle, XCircle, Zap, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConnectionSettingsModal } from '@/components/integrations/ConnectionSettingsModal';
+
+interface ConnectionWithProvider {
+  id: string;
+  name: string;
+  status: 'active' | 'paused' | 'error';
+  environment: string;
+  credentials: { token?: string };
+  provider_id: string;
+  last_test_success: boolean | null;
+  api_providers?: { name: string };
+}
 
 export default function Integrations() {
   const { data: providers = [] } = useProviders();
@@ -22,6 +34,7 @@ export default function Integrations() {
   const [form, setForm] = useState({ name: '', provider_id: '', token: '', environment: 'production' });
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [settingsConnection, setSettingsConnection] = useState<ConnectionWithProvider | null>(null);
 
   const handleCreate = async () => {
     if (!form.name || !form.provider_id || !form.token) {
@@ -69,23 +82,36 @@ export default function Integrations() {
       if (result.success) {
         const { total, endpoints: syncedEndpoints } = result;
         
-        // Build detailed message
-        const endpointDetails = Object.entries(syncedEndpoints)
-          .map(([name, data]: [string, any]) => {
-            if (data.error) return `❌ ${name}: ${data.error}`;
-            return `✅ ${name}: ${data.processed} registros`;
-          })
-          .join('\n');
+        // Check for endpoint errors
+        const errors = Object.entries(syncedEndpoints)
+          .filter(([_, data]: [string, any]) => data.error)
+          .map(([name, data]: [string, any]) => `${name}: ${data.error.substring(0, 80)}`);
 
-        toast.success(
-          `Sincronização concluída!\n\nTotal: ${total.processed} registros\nCriados: ${total.created} | Atualizados: ${total.updated}\nTempo: ${(result.duration_ms / 1000).toFixed(1)}s`,
-          { id: toastId, duration: 8000 }
-        );
+        if (errors.length > 0 && total.processed === 0) {
+          // All endpoints failed
+          toast.error(
+            `Sincronização falhou!\n\n${errors.join('\n')}`,
+            { id: toastId, duration: 10000 }
+          );
+        } else if (errors.length > 0) {
+          // Partial success
+          toast.warning(
+            `Sincronização parcial!\n\nSucesso: ${total.processed} registros\nErros em: ${errors.length} endpoints\n\n${errors.join('\n')}`,
+            { id: toastId, duration: 10000 }
+          );
+        } else {
+          // Full success
+          toast.success(
+            `Sincronização concluída!\n\nTotal: ${total.processed} registros\nCriados: ${total.created} | Atualizados: ${total.updated}\nTempo: ${(result.duration_ms / 1000).toFixed(1)}s`,
+            { id: toastId, duration: 8000 }
+          );
+        }
       } else {
-        toast.error(`Erro: ${result.error}`, { id: toastId });
+        // Overall failure
+        toast.error(`Erro na sincronização: ${result.error}`, { id: toastId, duration: 10000 });
       }
     } catch (error: any) {
-      toast.error('Erro na sincronização: ' + error.message, { id: toastId });
+      toast.error(`Erro crítico: ${error.message}`, { id: toastId, duration: 10000 });
     } finally {
       setSyncingId(null);
     }
@@ -217,7 +243,13 @@ export default function Integrations() {
                         )}
                         Sincronizar
                       </Button>
-                      <Button variant="ghost" size="sm"><Settings className="h-4 w-4" /></Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => setSettingsConnection(conn as ConnectionWithProvider)}
+                      >
+                        <Settings className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
                 </CardContent>
@@ -226,6 +258,12 @@ export default function Integrations() {
           })}
         </div>
       )}
+
+      <ConnectionSettingsModal 
+        connection={settingsConnection}
+        open={!!settingsConnection}
+        onOpenChange={(open) => !open && setSettingsConnection(null)}
+      />
     </div>
   );
 }
