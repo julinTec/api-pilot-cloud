@@ -7,10 +7,22 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const MAX_EXECUTION_TIME_MS = 50000; // 50 seconds (leave 10s buffer)
+const BATCH_SIZE = 50;
+
 interface EskolareConfig {
   connectionId: string;
   endpoint?: string;
   testOnly?: boolean;
+}
+
+function getExternalId(record: any): string {
+  return record.id?.toString() || 
+         record.uuid?.toString() || 
+         record.order_id?.toString() || 
+         record.code?.toString() ||
+         record.slug?.toString() ||
+         JSON.stringify(record).substring(0, 50);
 }
 
 // Test connection by calling /orders/?limit=1
@@ -18,29 +30,25 @@ async function testConnection(baseUrl: string, token: string): Promise<{ success
   try {
     const url = `${baseUrl}/orders/?limit=1`;
     console.log(`[TEST] Testing connection to: ${url}`);
-    console.log(`[TEST] Token format: Bearer ${token.substring(0, 10)}...${token.substring(token.length - 5)}`);
     
     const headers = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
-    console.log(`[TEST] Request headers:`, JSON.stringify(headers, null, 2));
     
     const response = await fetch(url, { headers });
 
     console.log(`[TEST] Response status: ${response.status}`);
-    console.log(`[TEST] Response headers:`, JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2));
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[TEST] Connection test failed: ${response.status}`);
-      console.error(`[TEST] Error body: ${errorText.substring(0, 500)}`);
       return { success: false, error: `HTTP ${response.status}: ${errorText.substring(0, 200)}` };
     }
 
     const data = await response.json();
-    console.log('[TEST] Connection test successful:', JSON.stringify(data, null, 2));
+    console.log('[TEST] Connection test successful');
     return { success: true, data };
   } catch (error: any) {
     console.error('[TEST] Connection test exception:', error);
@@ -65,7 +73,6 @@ async function fetchWithPagination(
     'Accept': 'application/json',
   };
 
-  // Regular paginated endpoints
   while (hasMore) {
     const url = `${baseUrl}${path}?limit=${limit}&offset=${offset}`;
     console.log(`[FETCH] Paginated URL: ${url}`);
@@ -77,7 +84,6 @@ async function fetchWithPagination(
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[FETCH] API Error for ${path}: ${response.status}`);
-      console.error(`[FETCH] Error body: ${errorText.substring(0, 500)}`);
       throw new Error(`Endpoint ${path} retornou erro ${response.status}: ${errorText.substring(0, 100)}`);
     }
 
@@ -115,70 +121,73 @@ async function syncEndpoint(
   baseUrl: string,
   token: string,
   path: string,
-  responseDataPath: string
-): Promise<{ processed: number; created: number; updated: number }> {
+  responseDataPath: string,
+  startTime: number
+): Promise<{ processed: number; created: number; updated: number; timedOut: boolean }> {
   const tableName = `eskolare_${endpointSlug}`;
-  console.log(`Syncing endpoint: ${endpointSlug} to table: ${tableName}`);
+  console.log(`[SYNC] Syncing endpoint: ${endpointSlug} to table: ${tableName}`);
   
-  const { data: records, isList } = await fetchWithPagination(baseUrl, path, token, responseDataPath);
+  const { data: records } = await fetchWithPagination(baseUrl, path, token, responseDataPath);
   
+  let processed = 0;
   let created = 0;
   let updated = 0;
+  let timedOut = false;
 
-  // Regular list-based endpoints
-  for (const record of records) {
-    // Try multiple ID fields that might be present
-    const externalId = record.id?.toString() || 
-                       record.uuid?.toString() || 
-                       record.order_id?.toString() || 
-                       record.code?.toString() ||
-                       record.slug?.toString() ||
-                       JSON.stringify(record).substring(0, 50);
-    
+  // Process in batches using upsert
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    // Check timeout before processing batch
+    const elapsed = Date.now() - startTime;
+    if (elapsed > MAX_EXECUTION_TIME_MS) {
+      console.log(`[SYNC] Timeout approaching after ${elapsed}ms, processed ${processed}/${records.length} records`);
+      timedOut = true;
+      break;
+    }
+
+    const batch = records.slice(i, i + BATCH_SIZE);
+    const batchData = batch.map(record => ({
+      connection_id: connectionId,
+      external_id: getExternalId(record),
+      data: record,
+      updated_at: new Date().toISOString(),
+    }));
+
     try {
-      // Check if record exists
-      const { data: existing } = await supabase
+      // First, get existing records to determine created vs updated counts
+      const externalIds = batchData.map(r => r.external_id);
+      const { data: existingRecords } = await supabase
         .from(tableName)
-        .select('id')
+        .select('external_id')
         .eq('connection_id', connectionId)
-        .eq('external_id', externalId)
-        .maybeSingle();
+        .in('external_id', externalIds);
+      
+      const existingIds = new Set((existingRecords || []).map((r: any) => r.external_id));
+      const newCount = batchData.filter(r => !existingIds.has(r.external_id)).length;
+      const updateCount = batchData.length - newCount;
 
-      if (existing) {
-        // Update existing record
-        const { error: updateError } = await supabase
-          .from(tableName)
-          .update({ data: record, updated_at: new Date().toISOString() })
-          .eq('id', existing.id);
-        
-        if (updateError) {
-          console.error(`Error updating record ${externalId}:`, updateError);
-        } else {
-          updated++;
-        }
+      // Perform upsert using the unique index
+      const { error: upsertError } = await supabase
+        .from(tableName)
+        .upsert(batchData, { 
+          onConflict: 'connection_id,external_id',
+          ignoreDuplicates: false 
+        });
+
+      if (upsertError) {
+        console.error(`[SYNC] Error upserting batch at offset ${i}:`, upsertError);
       } else {
-        // Insert new record
-        const { error: insertError } = await supabase
-          .from(tableName)
-          .insert({
-            connection_id: connectionId,
-            external_id: externalId,
-            data: record,
-          });
-        
-        if (insertError) {
-          console.error(`Error inserting record ${externalId}:`, insertError);
-        } else {
-          created++;
-        }
+        created += newCount;
+        updated += updateCount;
+        processed += batch.length;
+        console.log(`[SYNC] Batch ${i / BATCH_SIZE + 1}: upserted ${batch.length} records (${newCount} new, ${updateCount} updated)`);
       }
-    } catch (recordError: any) {
-      console.error(`Error processing record ${externalId}:`, recordError);
+    } catch (batchError: any) {
+      console.error(`[SYNC] Error processing batch at offset ${i}:`, batchError);
     }
   }
 
-  console.log(`Sync complete for ${endpointSlug}: processed=${records.length}, created=${created}, updated=${updated}`);
-  return { processed: records.length, created, updated };
+  console.log(`[SYNC] Sync complete for ${endpointSlug}: processed=${processed}/${records.length}, created=${created}, updated=${updated}, timedOut=${timedOut}`);
+  return { processed, created, updated, timedOut };
 }
 
 serve(async (req) => {
@@ -187,11 +196,14 @@ serve(async (req) => {
   }
 
   const startTime = Date.now();
+  let supabase: any;
+  let logEntry: any = null;
+  let currentEndpoint: string = '';
   
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    supabase = createClient(supabaseUrl, supabaseKey);
 
     const { connectionId, endpoint, testOnly } = await req.json() as EskolareConfig;
 
@@ -221,11 +233,10 @@ serve(async (req) => {
 
     console.log(`Using base URL: ${baseUrl}, environment: ${connection.environment}`);
 
-    // Test-only mode - just verify the connection
+    // Test-only mode
     if (testOnly) {
       const testResult = await testConnection(baseUrl, token);
       
-      // Update connection with test result
       await supabase
         .from('api_connections')
         .update({
@@ -267,12 +278,22 @@ serve(async (req) => {
     let totalProcessed = 0;
     let totalCreated = 0;
     let totalUpdated = 0;
+    let hadTimeout = false;
 
     for (const ep of endpoints) {
+      // Check global timeout
+      const elapsed = Date.now() - startTime;
+      if (elapsed > MAX_EXECUTION_TIME_MS) {
+        console.log(`[MAIN] Global timeout after ${elapsed}ms, stopping before ${ep.slug}`);
+        hadTimeout = true;
+        break;
+      }
+
+      currentEndpoint = ep.slug;
       console.log(`Starting sync for endpoint: ${ep.slug} (${ep.path})`);
       
       // Create log entry
-      const { data: logEntry } = await supabase
+      const { data: newLogEntry } = await supabase
         .from('extraction_logs')
         .insert({
           connection_id: connectionId,
@@ -281,6 +302,8 @@ serve(async (req) => {
         })
         .select()
         .single();
+      
+      logEntry = newLogEntry;
 
       try {
         const result = await syncEndpoint(
@@ -290,7 +313,8 @@ serve(async (req) => {
           baseUrl,
           token,
           ep.path,
-          ep.response_data_path || 'results'
+          ep.response_data_path || 'results',
+          startTime
         );
 
         results[ep.slug] = result;
@@ -298,16 +322,21 @@ serve(async (req) => {
         totalCreated += result.created;
         totalUpdated += result.updated;
 
-        // Update log entry with success
+        if (result.timedOut) {
+          hadTimeout = true;
+        }
+
+        // Update log entry
         await supabase
           .from('extraction_logs')
           .update({
-            status: 'success',
+            status: result.timedOut ? 'error' : 'success',
             records_processed: result.processed,
             records_created: result.created,
             records_updated: result.updated,
             duration_ms: Date.now() - startTime,
             finished_at: new Date().toISOString(),
+            error_message: result.timedOut ? 'Timeout - processamento parcial' : null,
           })
           .eq('id', logEntry.id);
 
@@ -321,37 +350,61 @@ serve(async (req) => {
           .eq('connection_id', connectionId)
           .eq('endpoint_id', ep.id);
 
+        if (result.timedOut) {
+          break;
+        }
+
       } catch (epError: any) {
         console.error(`Error syncing ${ep.slug}:`, epError);
         results[ep.slug] = { error: epError.message };
 
-        // Update log entry with error
-        await supabase
-          .from('extraction_logs')
-          .update({
-            status: 'error',
-            error_message: epError.message,
-            duration_ms: Date.now() - startTime,
-            finished_at: new Date().toISOString(),
-          })
-          .eq('id', logEntry.id);
+        if (logEntry) {
+          await supabase
+            .from('extraction_logs')
+            .update({
+              status: 'error',
+              error_message: epError.message,
+              duration_ms: Date.now() - startTime,
+              finished_at: new Date().toISOString(),
+            })
+            .eq('id', logEntry.id);
+        }
       }
     }
 
-    console.log(`Sync complete. Total: processed=${totalProcessed}, created=${totalCreated}, updated=${totalUpdated}`);
+    console.log(`Sync complete. Total: processed=${totalProcessed}, created=${totalCreated}, updated=${totalUpdated}, hadTimeout=${hadTimeout}`);
 
     return new Response(
       JSON.stringify({
-        success: true,
+        success: !hadTimeout,
         duration_ms: Date.now() - startTime,
         total: { processed: totalProcessed, created: totalCreated, updated: totalUpdated },
         endpoints: results,
+        hadTimeout,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error: any) {
     console.error('Sync error:', error);
+    
+    // Ensure log entry is updated on error
+    if (supabase && logEntry) {
+      try {
+        await supabase
+          .from('extraction_logs')
+          .update({
+            status: 'error',
+            error_message: error.message,
+            duration_ms: Date.now() - startTime,
+            finished_at: new Date().toISOString(),
+          })
+          .eq('id', logEntry.id);
+      } catch (logError) {
+        console.error('Error updating log entry:', logError);
+      }
+    }
+    
     return new Response(
       JSON.stringify({ success: false, error: error.message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
