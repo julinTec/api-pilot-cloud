@@ -13,10 +13,10 @@ interface EskolareConfig {
   testOnly?: boolean;
 }
 
-// Test connection by calling /whoami/
+// Test connection by calling /orders/?limit=1
 async function testConnection(baseUrl: string, token: string): Promise<{ success: boolean; data?: any; error?: string }> {
   try {
-    const url = `${baseUrl}/whoami/`;
+    const url = `${baseUrl}/orders/?limit=1`;
     console.log(`[TEST] Testing connection to: ${url}`);
     console.log(`[TEST] Token format: Bearer ${token.substring(0, 10)}...${token.substring(token.length - 5)}`);
     
@@ -64,29 +64,6 @@ async function fetchWithPagination(
     'Content-Type': 'application/json',
     'Accept': 'application/json',
   };
-
-  // Dashboard endpoint returns a single object, not a list
-  if (path.includes('dashboard')) {
-    const url = `${baseUrl}${path}`;
-    console.log(`[FETCH] Dashboard URL: ${url}`);
-    console.log(`[FETCH] Headers:`, JSON.stringify(headers, null, 2));
-    
-    const response = await fetch(url, { headers });
-    
-    console.log(`[FETCH] Dashboard response status: ${response.status}`);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[FETCH] Dashboard error: ${response.status} - ${errorText.substring(0, 300)}`);
-      throw new Error(`API Error ${response.status}: ${errorText.substring(0, 200)}`);
-    }
-
-    const data = await response.json();
-    console.log(`[FETCH] Dashboard response keys:`, Object.keys(data));
-    
-    const dashboardData = data.data || data;
-    return { data: [dashboardData], isList: false };
-  }
 
   // Regular paginated endpoints
   while (hasMore) {
@@ -148,68 +125,55 @@ async function syncEndpoint(
   let created = 0;
   let updated = 0;
 
-  // Special handling for summaries (dashboard) - not a list
-  if (!isList && endpointSlug === 'summaries') {
-    const record = records[0];
-    const reportType = 'dashboard';
-    
-    // Check if summary exists
-    const { data: existing } = await supabase
-      .from('eskolare_summaries')
-      .select('id')
-      .eq('connection_id', connectionId)
-      .eq('report_type', reportType)
-      .maybeSingle();
-
-    if (existing) {
-      await supabase
-        .from('eskolare_summaries')
-        .update({ data: record, updated_at: new Date().toISOString() })
-        .eq('id', existing.id);
-      updated++;
-    } else {
-      await supabase
-        .from('eskolare_summaries')
-        .insert({
-          connection_id: connectionId,
-          report_type: reportType,
-          data: record,
-        });
-      created++;
-    }
-    
-    return { processed: 1, created, updated };
-  }
-
   // Regular list-based endpoints
   for (const record of records) {
-    const externalId = record.id?.toString() || record.uuid || record.order_id?.toString() || JSON.stringify(record).substring(0, 50);
+    // Try multiple ID fields that might be present
+    const externalId = record.id?.toString() || 
+                       record.uuid?.toString() || 
+                       record.order_id?.toString() || 
+                       record.code?.toString() ||
+                       record.slug?.toString() ||
+                       JSON.stringify(record).substring(0, 50);
     
-    // Check if record exists
-    const { data: existing } = await supabase
-      .from(tableName)
-      .select('id')
-      .eq('connection_id', connectionId)
-      .eq('external_id', externalId)
-      .maybeSingle();
+    try {
+      // Check if record exists
+      const { data: existing } = await supabase
+        .from(tableName)
+        .select('id')
+        .eq('connection_id', connectionId)
+        .eq('external_id', externalId)
+        .maybeSingle();
 
-    if (existing) {
-      // Update existing record
-      await supabase
-        .from(tableName)
-        .update({ data: record, updated_at: new Date().toISOString() })
-        .eq('id', existing.id);
-      updated++;
-    } else {
-      // Insert new record
-      await supabase
-        .from(tableName)
-        .insert({
-          connection_id: connectionId,
-          external_id: externalId,
-          data: record,
-        });
-      created++;
+      if (existing) {
+        // Update existing record
+        const { error: updateError } = await supabase
+          .from(tableName)
+          .update({ data: record, updated_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        
+        if (updateError) {
+          console.error(`Error updating record ${externalId}:`, updateError);
+        } else {
+          updated++;
+        }
+      } else {
+        // Insert new record
+        const { error: insertError } = await supabase
+          .from(tableName)
+          .insert({
+            connection_id: connectionId,
+            external_id: externalId,
+            data: record,
+          });
+        
+        if (insertError) {
+          console.error(`Error inserting record ${externalId}:`, insertError);
+        } else {
+          created++;
+        }
+      }
+    } catch (recordError: any) {
+      console.error(`Error processing record ${externalId}:`, recordError);
     }
   }
 

@@ -197,6 +197,76 @@ export type Database = {
           },
         ]
       }
+      eskolare_categories: {
+        Row: {
+          connection_id: string
+          created_at: string
+          data: Json
+          external_id: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          connection_id: string
+          created_at?: string
+          data: Json
+          external_id: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          connection_id?: string
+          created_at?: string
+          data?: Json
+          external_id?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "eskolare_categories_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "api_connections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      eskolare_grades: {
+        Row: {
+          connection_id: string
+          created_at: string
+          data: Json
+          external_id: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          connection_id: string
+          created_at?: string
+          data: Json
+          external_id: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          connection_id?: string
+          created_at?: string
+          data?: Json
+          external_id?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "eskolare_grades_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "api_connections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       eskolare_orders: {
         Row: {
           connection_id: string
@@ -302,6 +372,41 @@ export type Database = {
           },
         ]
       }
+      eskolare_showcases: {
+        Row: {
+          connection_id: string
+          created_at: string
+          data: Json
+          external_id: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          connection_id: string
+          created_at?: string
+          data: Json
+          external_id: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          connection_id?: string
+          created_at?: string
+          data?: Json
+          external_id?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "eskolare_showcases_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "api_connections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       eskolare_summaries: {
         Row: {
           connection_id: string
@@ -336,6 +441,76 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "eskolare_summaries_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "api_connections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      eskolare_transactions: {
+        Row: {
+          connection_id: string
+          created_at: string
+          data: Json
+          external_id: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          connection_id: string
+          created_at?: string
+          data: Json
+          external_id: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          connection_id?: string
+          created_at?: string
+          data?: Json
+          external_id?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "eskolare_transactions_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "api_connections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      eskolare_withdrawals: {
+        Row: {
+          connection_id: string
+          created_at: string
+          data: Json
+          external_id: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          connection_id: string
+          created_at?: string
+          data: Json
+          external_id: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          connection_id?: string
+          created_at?: string
+          data?: Json
+          external_id?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "eskolare_withdrawals_connection_id_fkey"
             columns: ["connection_id"]
             isOneToOne: false
             referencedRelation: "api_connections"

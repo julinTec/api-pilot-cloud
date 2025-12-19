@@ -12,14 +12,18 @@ import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
-type TableName = 'eskolare_orders' | 'eskolare_payments' | 'eskolare_cancellations' | 'eskolare_partnerships' | 'eskolare_summaries';
+type TableName = 'eskolare_orders' | 'eskolare_payments' | 'eskolare_cancellations' | 'eskolare_partnerships' | 'eskolare_grades' | 'eskolare_showcases' | 'eskolare_withdrawals' | 'eskolare_transactions' | 'eskolare_categories';
 
 const tableOptions: { value: TableName; label: string }[] = [
   { value: 'eskolare_orders', label: 'Pedidos' },
   { value: 'eskolare_payments', label: 'Pagamentos' },
   { value: 'eskolare_cancellations', label: 'Cancelamentos' },
   { value: 'eskolare_partnerships', label: 'Parcerias' },
-  { value: 'eskolare_summaries', label: 'Resumos' },
+  { value: 'eskolare_grades', label: 'Séries' },
+  { value: 'eskolare_showcases', label: 'Vitrines' },
+  { value: 'eskolare_withdrawals', label: 'Saques' },
+  { value: 'eskolare_transactions', label: 'Transações' },
+  { value: 'eskolare_categories', label: 'Categorias' },
 ];
 
 export default function Data() {
