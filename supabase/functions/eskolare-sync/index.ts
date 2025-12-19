@@ -9,6 +9,7 @@ const corsHeaders = {
 
 const MAX_EXECUTION_TIME_MS = 50000; // 50 seconds (leave 10s buffer)
 const BATCH_SIZE = 50;
+const PAGE_SIZE = 500; // Increased from 100
 
 interface EskolareConfig {
   connectionId: string;
@@ -56,65 +57,49 @@ async function testConnection(baseUrl: string, token: string): Promise<{ success
   }
 }
 
-async function fetchWithPagination(
-  baseUrl: string,
-  path: string,
-  token: string,
-  responseDataPath: string = 'results'
-): Promise<{ data: any[]; isList: boolean }> {
-  const allData: any[] = [];
-  let offset = 0;
-  const limit = 100;
-  let hasMore = true;
+// Process and upsert a batch of records
+async function processBatch(
+  supabase: any,
+  tableName: string,
+  connectionId: string,
+  records: any[]
+): Promise<{ created: number; updated: number }> {
+  const batchData = records.map(record => ({
+    connection_id: connectionId,
+    external_id: getExternalId(record),
+    data: record,
+    updated_at: new Date().toISOString(),
+  }));
 
-  const headers = {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  };
+  // Get existing records to determine created vs updated counts
+  const externalIds = batchData.map(r => r.external_id);
+  const { data: existingRecords } = await supabase
+    .from(tableName)
+    .select('external_id')
+    .eq('connection_id', connectionId)
+    .in('external_id', externalIds);
+  
+  const existingIds = new Set((existingRecords || []).map((r: any) => r.external_id));
+  const created = batchData.filter(r => !existingIds.has(r.external_id)).length;
+  const updated = batchData.length - created;
 
-  while (hasMore) {
-    const url = `${baseUrl}${path}?limit=${limit}&offset=${offset}`;
-    console.log(`[FETCH] Paginated URL: ${url}`);
-    
-    const response = await fetch(url, { headers });
-    
-    console.log(`[FETCH] Response status for ${path}: ${response.status}`);
+  // Perform upsert using the unique index
+  const { error: upsertError } = await supabase
+    .from(tableName)
+    .upsert(batchData, { 
+      onConflict: 'connection_id,external_id',
+      ignoreDuplicates: false 
+    });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[FETCH] API Error for ${path}: ${response.status}`);
-      throw new Error(`Endpoint ${path} retornou erro ${response.status}: ${errorText.substring(0, 100)}`);
-    }
-
-    const data = await response.json();
-    console.log(`[FETCH] Response for ${path}: count=${data.count}, keys=${Object.keys(data)}`);
-    
-    const results = data[responseDataPath] || data.results || data.data || [];
-    
-    if (!Array.isArray(results)) {
-      console.log(`[FETCH] Response is not an array, treating as single item`);
-      allData.push(results);
-      hasMore = false;
-    } else if (results.length === 0) {
-      console.log(`[FETCH] No more results for ${path}`);
-      hasMore = false;
-    } else {
-      allData.push(...results);
-      offset += limit;
-      console.log(`[FETCH] Fetched ${results.length} records, total: ${allData.length}`);
-      
-      if (results.length < limit || (data.count && allData.length >= data.count)) {
-        hasMore = false;
-      }
-    }
+  if (upsertError) {
+    throw upsertError;
   }
 
-  console.log(`[FETCH] Total fetched for ${path}: ${allData.length} records`);
-  return { data: allData, isList: true };
+  return { created, updated };
 }
 
-async function syncEndpoint(
+// Sync endpoint with streaming processing (fetch + process simultaneously)
+async function syncEndpointStreaming(
   supabase: any,
   connectionId: string,
   endpointSlug: string,
@@ -122,72 +107,125 @@ async function syncEndpoint(
   token: string,
   path: string,
   responseDataPath: string,
-  startTime: number
-): Promise<{ processed: number; created: number; updated: number; timedOut: boolean }> {
+  startTime: number,
+  logEntryId: string
+): Promise<{ processed: number; created: number; updated: number; timedOut: boolean; totalRecords: number }> {
   const tableName = `eskolare_${endpointSlug}`;
-  console.log(`[SYNC] Syncing endpoint: ${endpointSlug} to table: ${tableName}`);
+  console.log(`[SYNC] Streaming sync for: ${endpointSlug} to table: ${tableName}`);
   
-  const { data: records } = await fetchWithPagination(baseUrl, path, token, responseDataPath);
-  
+  let offset = 0;
+  let hasMore = true;
+  let totalRecords = 0;
   let processed = 0;
   let created = 0;
   let updated = 0;
   let timedOut = false;
+  let pendingRecords: any[] = [];
 
-  // Process in batches using upsert
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    // Check timeout before processing batch
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+
+  while (hasMore && !timedOut) {
+    // Check timeout before fetching
     const elapsed = Date.now() - startTime;
     if (elapsed > MAX_EXECUTION_TIME_MS) {
-      console.log(`[SYNC] Timeout approaching after ${elapsed}ms, processed ${processed}/${records.length} records`);
+      console.log(`[SYNC] Timeout at offset ${offset}, processed ${processed} records`);
       timedOut = true;
       break;
     }
 
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const batchData = batch.map(record => ({
-      connection_id: connectionId,
-      external_id: getExternalId(record),
-      data: record,
-      updated_at: new Date().toISOString(),
-    }));
+    // Fetch next page
+    const url = `${baseUrl}${path}?limit=${PAGE_SIZE}&offset=${offset}`;
+    console.log(`[FETCH] URL: ${url}`);
+    
+    const response = await fetch(url, { headers });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Endpoint ${path} retornou erro ${response.status}: ${errorText.substring(0, 100)}`);
+    }
 
-    try {
-      // First, get existing records to determine created vs updated counts
-      const externalIds = batchData.map(r => r.external_id);
-      const { data: existingRecords } = await supabase
-        .from(tableName)
-        .select('external_id')
-        .eq('connection_id', connectionId)
-        .in('external_id', externalIds);
+    const data = await response.json();
+    const results = data[responseDataPath] || data.results || data.data || [];
+    
+    if (!Array.isArray(results)) {
+      pendingRecords.push(results);
+      hasMore = false;
+    } else if (results.length === 0) {
+      hasMore = false;
+    } else {
+      totalRecords = data.count || totalRecords;
+      pendingRecords.push(...results);
+      offset += PAGE_SIZE;
       
-      const existingIds = new Set((existingRecords || []).map((r: any) => r.external_id));
-      const newCount = batchData.filter(r => !existingIds.has(r.external_id)).length;
-      const updateCount = batchData.length - newCount;
-
-      // Perform upsert using the unique index
-      const { error: upsertError } = await supabase
-        .from(tableName)
-        .upsert(batchData, { 
-          onConflict: 'connection_id,external_id',
-          ignoreDuplicates: false 
-        });
-
-      if (upsertError) {
-        console.error(`[SYNC] Error upserting batch at offset ${i}:`, upsertError);
-      } else {
-        created += newCount;
-        updated += updateCount;
-        processed += batch.length;
-        console.log(`[SYNC] Batch ${i / BATCH_SIZE + 1}: upserted ${batch.length} records (${newCount} new, ${updateCount} updated)`);
+      console.log(`[FETCH] Got ${results.length} records, pending: ${pendingRecords.length}, offset: ${offset}/${totalRecords}`);
+      
+      if (results.length < PAGE_SIZE || (data.count && offset >= data.count)) {
+        hasMore = false;
       }
-    } catch (batchError: any) {
-      console.error(`[SYNC] Error processing batch at offset ${i}:`, batchError);
+    }
+
+    // Process pending records in batches while we have enough
+    while (pendingRecords.length >= BATCH_SIZE && !timedOut) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > MAX_EXECUTION_TIME_MS) {
+        console.log(`[SYNC] Timeout during batch processing at ${processed} records`);
+        timedOut = true;
+        break;
+      }
+
+      const batch = pendingRecords.splice(0, BATCH_SIZE);
+      try {
+        const result = await processBatch(supabase, tableName, connectionId, batch);
+        created += result.created;
+        updated += result.updated;
+        processed += batch.length;
+        console.log(`[SYNC] Processed batch: ${processed} total (${result.created} new, ${result.updated} updated)`);
+      } catch (batchError: any) {
+        console.error(`[SYNC] Batch error:`, batchError.message);
+      }
+
+      // Update log entry with progress periodically (every 500 records)
+      if (processed % 500 === 0) {
+        await supabase
+          .from('extraction_logs')
+          .update({
+            records_processed: processed,
+            records_created: created,
+            records_updated: updated,
+            duration_ms: Date.now() - startTime,
+            error_message: `Em progresso: ${processed}/${totalRecords || '?'} registros`,
+          })
+          .eq('id', logEntryId);
+      }
     }
   }
 
-  console.log(`[SYNC] Sync complete for ${endpointSlug}: processed=${processed}/${records.length}, created=${created}, updated=${updated}, timedOut=${timedOut}`);
-  return { processed, created, updated, timedOut };
+  // Process remaining records
+  while (pendingRecords.length > 0 && !timedOut) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > MAX_EXECUTION_TIME_MS) {
+      console.log(`[SYNC] Timeout processing remaining records at ${processed}`);
+      timedOut = true;
+      break;
+    }
+
+    const batch = pendingRecords.splice(0, BATCH_SIZE);
+    try {
+      const result = await processBatch(supabase, tableName, connectionId, batch);
+      created += result.created;
+      updated += result.updated;
+      processed += batch.length;
+    } catch (batchError: any) {
+      console.error(`[SYNC] Final batch error:`, batchError.message);
+    }
+  }
+
+  console.log(`[SYNC] Complete for ${endpointSlug}: processed=${processed}/${totalRecords}, created=${created}, updated=${updated}, timedOut=${timedOut}`);
+  return { processed, created, updated, timedOut, totalRecords };
 }
 
 serve(async (req) => {
@@ -198,7 +236,6 @@ serve(async (req) => {
   const startTime = Date.now();
   let supabase: any;
   let logEntry: any = null;
-  let currentEndpoint: string = '';
   
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -289,7 +326,6 @@ serve(async (req) => {
         break;
       }
 
-      currentEndpoint = ep.slug;
       console.log(`Starting sync for endpoint: ${ep.slug} (${ep.path})`);
       
       // Create log entry
@@ -306,7 +342,7 @@ serve(async (req) => {
       logEntry = newLogEntry;
 
       try {
-        const result = await syncEndpoint(
+        const result = await syncEndpointStreaming(
           supabase,
           connectionId,
           ep.slug,
@@ -314,7 +350,8 @@ serve(async (req) => {
           token,
           ep.path,
           ep.response_data_path || 'results',
-          startTime
+          startTime,
+          logEntry.id
         );
 
         results[ep.slug] = result;
@@ -326,7 +363,7 @@ serve(async (req) => {
           hadTimeout = true;
         }
 
-        // Update log entry
+        // Update log entry with final status
         await supabase
           .from('extraction_logs')
           .update({
@@ -336,7 +373,9 @@ serve(async (req) => {
             records_updated: result.updated,
             duration_ms: Date.now() - startTime,
             finished_at: new Date().toISOString(),
-            error_message: result.timedOut ? 'Timeout - processamento parcial' : null,
+            error_message: result.timedOut 
+              ? `Timeout - processado ${result.processed}/${result.totalRecords} registros` 
+              : null,
           })
           .eq('id', logEntry.id);
 
