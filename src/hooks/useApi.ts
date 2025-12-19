@@ -91,6 +91,24 @@ export function useSyncConnection() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['extraction-logs'] });
+      queryClient.invalidateQueries({ queryKey: ['table-data'] });
+      queryClient.invalidateQueries({ queryKey: ['table-counts'] });
+    },
+  });
+}
+
+export function useTestConnection() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (connectionId: string) => {
+      const { data, error } = await supabase.functions.invoke('eskolare-sync', {
+        body: { connectionId, testOnly: true },
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['connections'] });
     },
   });
 }

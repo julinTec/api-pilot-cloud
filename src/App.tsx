@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import Integrations from "./pages/Integrations";
 import Logs from "./pages/Logs";
 import Endpoints from "./pages/Endpoints";
+import Data from "./pages/Data";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ const App = () => (
             <Route path="/integrations" element={<Integrations />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/endpoints" element={<Endpoints />} />
+            <Route path="/data" element={<Data />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AppLayout>

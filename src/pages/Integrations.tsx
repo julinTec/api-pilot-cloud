@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useProviders, useConnections, useCreateConnection, useEndpoints, useSyncConnection } from '@/hooks/useApi';
+import { useProviders, useConnections, useCreateConnection, useEndpoints, useSyncConnection, useTestConnection } from '@/hooks/useApi';
 import { PageHeader } from '@/components/ui/page-header';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Plug, RefreshCw, Settings, CheckCircle, XCircle } from 'lucide-react';
+import { Plus, Plug, RefreshCw, Settings, CheckCircle, XCircle, Zap, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function Integrations() {
@@ -17,8 +17,11 @@ export default function Integrations() {
   const { data: endpoints = [] } = useEndpoints();
   const createConnection = useCreateConnection();
   const syncMutation = useSyncConnection();
+  const testMutation = useTestConnection();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', provider_id: '', token: '', environment: 'production' });
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
 
   const handleCreate = async () => {
     if (!form.name || !form.provider_id || !form.token) {
@@ -40,12 +43,51 @@ export default function Integrations() {
     }
   };
 
-  const handleSync = async (connectionId: string) => {
+  const handleTest = async (connectionId: string) => {
+    setTestingId(connectionId);
     try {
-      await syncMutation.mutateAsync({ connectionId });
-      toast.success('Sincronização iniciada!');
+      const result = await testMutation.mutateAsync(connectionId);
+      if (result.success) {
+        toast.success('Conexão válida! Token funcionando corretamente.');
+      } else {
+        toast.error(`Falha no teste: ${result.testResult?.error || 'Erro desconhecido'}`);
+      }
     } catch (error: any) {
-      toast.error('Erro: ' + error.message);
+      toast.error('Erro ao testar: ' + error.message);
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const handleSync = async (connectionId: string, connectionName: string) => {
+    setSyncingId(connectionId);
+    const toastId = toast.loading(`Sincronizando ${connectionName}...`);
+    
+    try {
+      const result = await syncMutation.mutateAsync({ connectionId });
+      
+      if (result.success) {
+        const { total, endpoints: syncedEndpoints } = result;
+        
+        // Build detailed message
+        const endpointDetails = Object.entries(syncedEndpoints)
+          .map(([name, data]: [string, any]) => {
+            if (data.error) return `❌ ${name}: ${data.error}`;
+            return `✅ ${name}: ${data.processed} registros`;
+          })
+          .join('\n');
+
+        toast.success(
+          `Sincronização concluída!\n\nTotal: ${total.processed} registros\nCriados: ${total.created} | Atualizados: ${total.updated}\nTempo: ${(result.duration_ms / 1000).toFixed(1)}s`,
+          { id: toastId, duration: 8000 }
+        );
+      } else {
+        toast.error(`Erro: ${result.error}`, { id: toastId });
+      }
+    } catch (error: any) {
+      toast.error('Erro na sincronização: ' + error.message, { id: toastId });
+    } finally {
+      setSyncingId(null);
     }
   };
 
@@ -112,6 +154,9 @@ export default function Integrations() {
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           {connections.map((conn) => {
             const providerEndpoints = endpoints.filter(e => e.provider_id === conn.provider_id);
+            const isSyncing = syncingId === conn.id;
+            const isTesting = testingId === conn.id;
+            
             return (
               <Card key={conn.id} className="transition-all hover:border-primary/30">
                 <CardHeader className="flex flex-row items-start justify-between pb-2">
@@ -145,8 +190,31 @@ export default function Integrations() {
                       </span>
                     </div>
                     <div className="flex gap-2 pt-2">
-                      <Button variant="outline" size="sm" className="flex-1" onClick={() => handleSync(conn.id)} disabled={syncMutation.isPending}>
-                        <RefreshCw className={`mr-2 h-4 w-4 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => handleTest(conn.id)} 
+                        disabled={isTesting || isSyncing}
+                      >
+                        {isTesting ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Zap className="mr-2 h-4 w-4" />
+                        )}
+                        Testar
+                      </Button>
+                      <Button 
+                        variant="default" 
+                        size="sm" 
+                        className="flex-1" 
+                        onClick={() => handleSync(conn.id, conn.name)} 
+                        disabled={isSyncing || isTesting}
+                      >
+                        {isSyncing ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                        )}
                         Sincronizar
                       </Button>
                       <Button variant="ghost" size="sm"><Settings className="h-4 w-4" /></Button>
