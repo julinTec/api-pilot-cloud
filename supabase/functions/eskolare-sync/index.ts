@@ -10,22 +10,52 @@ const corsHeaders = {
 interface EskolareConfig {
   connectionId: string;
   endpoint?: string;
+  testOnly?: boolean;
+}
+
+// Test connection by calling /whoami/
+async function testConnection(baseUrl: string, token: string): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const url = `${baseUrl}/whoami/`;
+    console.log(`Testing connection: ${url}`);
+    
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Connection test failed: ${response.status} - ${errorText}`);
+      return { success: false, error: `HTTP ${response.status}: ${errorText}` };
+    }
+
+    const data = await response.json();
+    console.log('Connection test successful:', data);
+    return { success: true, data };
+  } catch (error: any) {
+    console.error('Connection test error:', error);
+    return { success: false, error: error.message };
+  }
 }
 
 async function fetchWithPagination(
   baseUrl: string,
   path: string,
   token: string,
-  dataPath: string = 'results'
-): Promise<any[]> {
+  responseDataPath: string = 'results'
+): Promise<{ data: any[]; isList: boolean }> {
   const allData: any[] = [];
   let offset = 0;
   const limit = 100;
   let hasMore = true;
 
-  while (hasMore) {
-    const url = `${baseUrl}${path}?limit=${limit}&offset=${offset}`;
-    console.log(`Fetching: ${url}`);
+  // Dashboard endpoint returns a single object, not a list
+  if (path.includes('dashboard')) {
+    const url = `${baseUrl}${path}`;
+    console.log(`Fetching dashboard: ${url}`);
     
     const response = await fetch(url, {
       headers: {
@@ -40,9 +70,42 @@ async function fetchWithPagination(
     }
 
     const data = await response.json();
-    const results = data[dataPath] || data.data || [];
+    console.log(`Dashboard response keys:`, Object.keys(data));
     
-    if (results.length === 0) {
+    // Dashboard returns an object with 'data' containing the summary
+    const dashboardData = data.data || data;
+    return { data: [dashboardData], isList: false };
+  }
+
+  // Regular paginated endpoints
+  while (hasMore) {
+    const url = `${baseUrl}${path}?limit=${limit}&offset=${offset}`;
+    console.log(`Fetching: ${url}`);
+    
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`API Error for ${path}: ${response.status} - ${errorText}`);
+      throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log(`Response for ${path}: count=${data.count}, keys=${Object.keys(data)}`);
+    
+    // Try to get results from the specified path or common alternatives
+    const results = data[responseDataPath] || data.results || data.data || [];
+    
+    if (!Array.isArray(results)) {
+      console.log(`Response is not an array, treating as single item`);
+      allData.push(results);
+      hasMore = false;
+    } else if (results.length === 0) {
       hasMore = false;
     } else {
       allData.push(...results);
@@ -55,7 +118,8 @@ async function fetchWithPagination(
     }
   }
 
-  return allData;
+  console.log(`Total fetched for ${path}: ${allData.length} records`);
+  return { data: allData, isList: true };
 }
 
 async function syncEndpoint(
@@ -64,16 +128,53 @@ async function syncEndpoint(
   endpointSlug: string,
   baseUrl: string,
   token: string,
-  path: string
+  path: string,
+  responseDataPath: string
 ): Promise<{ processed: number; created: number; updated: number }> {
   const tableName = `eskolare_${endpointSlug}`;
-  const data = await fetchWithPagination(baseUrl, path, token);
+  console.log(`Syncing endpoint: ${endpointSlug} to table: ${tableName}`);
+  
+  const { data: records, isList } = await fetchWithPagination(baseUrl, path, token, responseDataPath);
   
   let created = 0;
   let updated = 0;
 
-  for (const record of data) {
-    const externalId = record.id?.toString() || record.uuid || JSON.stringify(record).substring(0, 50);
+  // Special handling for summaries (dashboard) - not a list
+  if (!isList && endpointSlug === 'summaries') {
+    const record = records[0];
+    const reportType = 'dashboard';
+    
+    // Check if summary exists
+    const { data: existing } = await supabase
+      .from('eskolare_summaries')
+      .select('id')
+      .eq('connection_id', connectionId)
+      .eq('report_type', reportType)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase
+        .from('eskolare_summaries')
+        .update({ data: record, updated_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      updated++;
+    } else {
+      await supabase
+        .from('eskolare_summaries')
+        .insert({
+          connection_id: connectionId,
+          report_type: reportType,
+          data: record,
+        });
+      created++;
+    }
+    
+    return { processed: 1, created, updated };
+  }
+
+  // Regular list-based endpoints
+  for (const record of records) {
+    const externalId = record.id?.toString() || record.uuid || record.order_id?.toString() || JSON.stringify(record).substring(0, 50);
     
     // Check if record exists
     const { data: existing } = await supabase
@@ -81,7 +182,7 @@ async function syncEndpoint(
       .select('id')
       .eq('connection_id', connectionId)
       .eq('external_id', externalId)
-      .single();
+      .maybeSingle();
 
     if (existing) {
       // Update existing record
@@ -103,7 +204,8 @@ async function syncEndpoint(
     }
   }
 
-  return { processed: data.length, created, updated };
+  console.log(`Sync complete for ${endpointSlug}: processed=${records.length}, created=${created}, updated=${updated}`);
+  return { processed: records.length, created, updated };
 }
 
 serve(async (req) => {
@@ -118,7 +220,7 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const { connectionId, endpoint } = await req.json() as EskolareConfig;
+    const { connectionId, endpoint, testOnly } = await req.json() as EskolareConfig;
 
     if (!connectionId) {
       throw new Error('connectionId is required');
@@ -144,6 +246,31 @@ serve(async (req) => {
       ? connection.api_providers.base_url_dev 
       : connection.api_providers.base_url;
 
+    console.log(`Using base URL: ${baseUrl}, environment: ${connection.environment}`);
+
+    // Test-only mode - just verify the connection
+    if (testOnly) {
+      const testResult = await testConnection(baseUrl, token);
+      
+      // Update connection with test result
+      await supabase
+        .from('api_connections')
+        .update({
+          last_test_at: new Date().toISOString(),
+          last_test_success: testResult.success,
+        })
+        .eq('id', connectionId);
+
+      return new Response(
+        JSON.stringify({
+          success: testResult.success,
+          testResult,
+          duration_ms: Date.now() - startTime,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Get endpoints to sync
     const endpointsQuery = supabase
       .from('api_endpoints')
@@ -161,12 +288,16 @@ serve(async (req) => {
       throw new Error(`No endpoints found: ${endpointsError?.message}`);
     }
 
+    console.log(`Found ${endpoints.length} endpoints to sync`);
+
     const results: Record<string, any> = {};
     let totalProcessed = 0;
     let totalCreated = 0;
     let totalUpdated = 0;
 
     for (const ep of endpoints) {
+      console.log(`Starting sync for endpoint: ${ep.slug} (${ep.path})`);
+      
       // Create log entry
       const { data: logEntry } = await supabase
         .from('extraction_logs')
@@ -185,7 +316,8 @@ serve(async (req) => {
           ep.slug,
           baseUrl,
           token,
-          ep.path
+          ep.path,
+          ep.response_data_path || 'results'
         );
 
         results[ep.slug] = result;
@@ -232,6 +364,8 @@ serve(async (req) => {
           .eq('id', logEntry.id);
       }
     }
+
+    console.log(`Sync complete. Total: processed=${totalProcessed}, created=${totalCreated}, updated=${totalUpdated}`);
 
     return new Response(
       JSON.stringify({
