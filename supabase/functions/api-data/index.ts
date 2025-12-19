@@ -28,6 +28,9 @@ serve(async (req) => {
     const offset = parseInt(url.searchParams.get('offset') || '0');
     const startDate = url.searchParams.get('start_date');
     const endDate = url.searchParams.get('end_date');
+    const fetchAll = url.searchParams.get('all') === 'true';
+
+    console.log(`API Request: provider=${provider}, endpoint=${endpoint}, fetchAll=${fetchAll}, limit=${limit}, offset=${offset}`);
 
     // If no provider specified, return available providers
     if (!provider) {
@@ -80,6 +83,83 @@ serve(async (req) => {
     // Fetch data from the appropriate table
     const tableName = `${provider}_${endpoint}`;
     
+    // If fetchAll is true, we need to paginate through all records
+    if (fetchAll) {
+      console.log(`Fetching all records from ${tableName}...`);
+      
+      const allData: any[] = [];
+      let currentOffset = 0;
+      const batchSize = 1000;
+      let hasMore = true;
+      
+      while (hasMore) {
+        let query = supabase
+          .from(tableName)
+          .select('*')
+          .range(currentOffset, currentOffset + batchSize - 1);
+
+        if (connectionId) {
+          query = query.eq('connection_id', connectionId);
+        }
+
+        if (startDate) {
+          query = query.gte('created_at', startDate);
+        }
+
+        if (endDate) {
+          query = query.lte('created_at', endDate);
+        }
+
+        const { data, error } = await query;
+
+        if (error) {
+          if (error.message.includes('does not exist')) {
+            return new Response(
+              JSON.stringify({ 
+                error: `Endpoint '${endpoint}' not found for provider '${provider}'`,
+                hint: 'Check available endpoints using GET /api-data?provider=' + provider
+              }),
+              { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+          throw error;
+        }
+
+        if (data && data.length > 0) {
+          allData.push(...data);
+          currentOffset += batchSize;
+          hasMore = data.length === batchSize;
+          console.log(`Fetched ${allData.length} records so far...`);
+        } else {
+          hasMore = false;
+        }
+      }
+
+      console.log(`Total records fetched: ${allData.length}`);
+
+      // Flatten data for Power BI compatibility
+      const flattenedData = allData.map(row => ({
+        id: row.id,
+        external_id: row.external_id,
+        connection_id: row.connection_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        ...row.data,
+      }));
+
+      return new Response(
+        JSON.stringify({
+          provider,
+          endpoint,
+          count: flattenedData.length,
+          all_records: true,
+          data: flattenedData,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Standard paginated query
     let query = supabase
       .from(tableName)
       .select('*', { count: 'exact' });
@@ -124,13 +204,18 @@ serve(async (req) => {
       ...row.data,
     }));
 
+    const totalCount = count || 0;
+    const hasMore = offset + limit < totalCount;
+
     return new Response(
       JSON.stringify({
         provider,
         endpoint,
-        count,
+        count: totalCount,
         limit,
         offset,
+        has_more: hasMore,
+        next_offset: hasMore ? offset + limit : null,
         data: flattenedData,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
