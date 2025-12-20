@@ -531,11 +531,19 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Sync complete. Total: processed=${totalProcessed}, created=${totalCreated}, updated=${totalUpdated}, hadTimeout=${hadTimeout}, allComplete=${allComplete}`);
+    // Consider success if we processed any records, even if not all complete
+    const isSuccess = allComplete || totalProcessed > 0;
+    const isPartial = !allComplete && totalProcessed > 0;
+
+    console.log(`Sync complete. Total: processed=${totalProcessed}, created=${totalCreated}, updated=${totalUpdated}, hadTimeout=${hadTimeout}, allComplete=${allComplete}, isPartial=${isPartial}`);
 
     return new Response(
       JSON.stringify({
-        success: allComplete,
+        success: isSuccess,
+        partial: isPartial,
+        message: isPartial 
+          ? 'Sincronização parcial. Continuará automaticamente na próxima execução.' 
+          : undefined,
         duration_ms: Date.now() - startTime,
         total: { processed: totalProcessed, created: totalCreated, updated: totalUpdated },
         endpoints: results,

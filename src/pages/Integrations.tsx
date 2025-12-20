@@ -107,8 +107,9 @@ export default function Integrations() {
           );
         }
       } else {
-        // Overall failure
-        toast.error(`Erro na sincronização: ${result.error}`, { id: toastId, duration: 10000 });
+        // Overall failure - show actual error or a meaningful message
+        const errorMsg = result.error || result.message || 'Erro desconhecido na sincronização';
+        toast.error(`Erro na sincronização: ${errorMsg}`, { id: toastId, duration: 10000 });
       }
     } catch (error: any) {
       toast.error(`Erro crítico: ${error.message}`, { id: toastId, duration: 10000 });
