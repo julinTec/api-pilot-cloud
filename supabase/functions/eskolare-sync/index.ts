@@ -250,18 +250,28 @@ async function syncEndpointStreaming(
       pendingRecords.push(results);
       hasMore = false;
     } else if (results.length === 0) {
+      // API returned empty results - we're done
+      console.log(`[FETCH] No more results from API, stopping`);
       hasMore = false;
     } else {
-      totalRecords = data.count || totalRecords;
+      // Update total from API count (this is the authoritative count)
+      if (data.count && data.count > 0) {
+        totalRecords = data.count;
+      }
       
       // Remove duplicates before adding to pending
       const uniqueResults = removeDuplicatesFromBatch(results);
       pendingRecords.push(...uniqueResults);
+      
+      console.log(`[FETCH] Got ${results.length} records (${uniqueResults.length} unique after dedup), pending: ${pendingRecords.length}, offset: ${offset}/${totalRecords}`);
+      
+      // Increment offset AFTER logging
       offset += PAGE_SIZE;
       
-      console.log(`[FETCH] Got ${results.length} records (${uniqueResults.length} unique), pending: ${pendingRecords.length}, offset: ${offset}/${totalRecords}`);
-      
-      if (results.length < PAGE_SIZE || (data.count && offset >= data.count)) {
+      // ONLY stop when we've fetched past the total count from API
+      // Do NOT use results.length < PAGE_SIZE as stop condition (API may return duplicates)
+      if (totalRecords > 0 && offset >= totalRecords) {
+        console.log(`[FETCH] Reached end: offset ${offset} >= total ${totalRecords}`);
         hasMore = false;
       }
     }
@@ -326,12 +336,16 @@ async function syncEndpointStreaming(
     }
   }
 
-  const isComplete = !timedOut && !hasMore && pendingRecords.length === 0;
+  // Only mark complete if we fetched all data AND processed everything
+  // If totalRecords > 0, we need offset >= totalRecords to be complete
+  const fetchedAll = totalRecords > 0 ? offset >= totalRecords : !hasMore;
+  const processedAll = pendingRecords.length === 0;
+  const isComplete = !timedOut && fetchedAll && processedAll;
   
-  // Save final progress
+  // Save final progress - use the actual offset we reached
   await updateExtractionProgress(supabase, connectionId, endpointId, offset, isComplete, totalRecords);
 
-  console.log(`[SYNC] Complete for ${endpointSlug}: processed=${processed}/${totalRecords}, created=${created}, updated=${updated}, timedOut=${timedOut}, isComplete=${isComplete}`);
+  console.log(`[SYNC] Complete for ${endpointSlug}: processed=${processed}/${totalRecords}, offset=${offset}, created=${created}, updated=${updated}, timedOut=${timedOut}, fetchedAll=${fetchedAll}, isComplete=${isComplete}`);
   return { processed, created, updated, timedOut, totalRecords, finalOffset: offset, isComplete };
 }
 
