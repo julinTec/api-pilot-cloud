@@ -9,12 +9,13 @@ const corsHeaders = {
 
 const MAX_EXECUTION_TIME_MS = 50000; // 50 seconds (leave 10s buffer)
 const BATCH_SIZE = 50;
-const PAGE_SIZE = 500; // Increased from 100
+const PAGE_SIZE = 500;
 
 interface EskolareConfig {
   connectionId: string;
   endpoint?: string;
   testOnly?: boolean;
+  continueFromOffset?: boolean; // Continue from last saved offset
 }
 
 function getExternalId(record: any): string {
@@ -24,6 +25,17 @@ function getExternalId(record: any): string {
          record.code?.toString() ||
          record.slug?.toString() ||
          JSON.stringify(record).substring(0, 50);
+}
+
+// Remove duplicate records from a batch based on external_id
+function removeDuplicatesFromBatch(records: any[]): any[] {
+  const seen = new Map<string, any>();
+  for (const record of records) {
+    const externalId = getExternalId(record);
+    // Keep the last occurrence (most recent data)
+    seen.set(externalId, record);
+  }
+  return Array.from(seen.values());
 }
 
 // Test connection by calling /orders/?limit=1
@@ -57,14 +69,17 @@ async function testConnection(baseUrl: string, token: string): Promise<{ success
   }
 }
 
-// Process and upsert a batch of records
+// Process and upsert a batch of records with duplicate handling
 async function processBatch(
   supabase: any,
   tableName: string,
   connectionId: string,
   records: any[]
 ): Promise<{ created: number; updated: number }> {
-  const batchData = records.map(record => ({
+  // Remove duplicates from the batch first
+  const uniqueRecords = removeDuplicatesFromBatch(records);
+  
+  const batchData = uniqueRecords.map(record => ({
     connection_id: connectionId,
     external_id: getExternalId(record),
     data: record,
@@ -98,22 +113,102 @@ async function processBatch(
   return { created, updated };
 }
 
-// Sync endpoint with streaming processing (fetch + process simultaneously)
+// Get extraction config with progress info
+async function getExtractionConfig(
+  supabase: any,
+  connectionId: string,
+  endpointId: string
+): Promise<{ lastOffset: number; isComplete: boolean; totalRecords: number } | null> {
+  const { data, error } = await supabase
+    .from('extraction_configs')
+    .select('last_offset, is_complete, total_records')
+    .eq('connection_id', connectionId)
+    .eq('endpoint_id', endpointId)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return {
+    lastOffset: data.last_offset || 0,
+    isComplete: data.is_complete ?? true,
+    totalRecords: data.total_records || 0,
+  };
+}
+
+// Update extraction config progress
+async function updateExtractionProgress(
+  supabase: any,
+  connectionId: string,
+  endpointId: string,
+  offset: number,
+  isComplete: boolean,
+  totalRecords: number
+): Promise<void> {
+  // First try to update
+  const { data: updated, error: updateError } = await supabase
+    .from('extraction_configs')
+    .update({
+      last_offset: offset,
+      is_complete: isComplete,
+      total_records: totalRecords,
+      last_sync_at: new Date().toISOString(),
+      next_sync_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2 hours
+      updated_at: new Date().toISOString(),
+    })
+    .eq('connection_id', connectionId)
+    .eq('endpoint_id', endpointId)
+    .select();
+
+  // If no rows updated, insert a new config
+  if (!updated || updated.length === 0) {
+    await supabase
+      .from('extraction_configs')
+      .insert({
+        connection_id: connectionId,
+        endpoint_id: endpointId,
+        last_offset: offset,
+        is_complete: isComplete,
+        total_records: totalRecords,
+        last_sync_at: new Date().toISOString(),
+        next_sync_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      });
+  }
+}
+
+// Sync endpoint with streaming processing and incremental support
 async function syncEndpointStreaming(
   supabase: any,
   connectionId: string,
+  endpointId: string,
   endpointSlug: string,
   baseUrl: string,
   token: string,
   path: string,
   responseDataPath: string,
   startTime: number,
-  logEntryId: string
-): Promise<{ processed: number; created: number; updated: number; timedOut: boolean; totalRecords: number }> {
+  logEntryId: string,
+  continueFromOffset: boolean = false
+): Promise<{ processed: number; created: number; updated: number; timedOut: boolean; totalRecords: number; finalOffset: number; isComplete: boolean }> {
   const tableName = `eskolare_${endpointSlug}`;
   console.log(`[SYNC] Streaming sync for: ${endpointSlug} to table: ${tableName}`);
   
-  let offset = 0;
+  // Get last progress if continuing
+  let startOffset = 0;
+  if (continueFromOffset) {
+    const config = await getExtractionConfig(supabase, connectionId, endpointId);
+    if (config && !config.isComplete) {
+      startOffset = config.lastOffset;
+      console.log(`[SYNC] Continuing from offset ${startOffset} (was incomplete)`);
+    } else if (config?.isComplete) {
+      // If complete, start fresh
+      startOffset = 0;
+      console.log(`[SYNC] Starting fresh (previous sync was complete)`);
+    }
+  }
+  
+  let offset = startOffset;
   let hasMore = true;
   let totalRecords = 0;
   let processed = 0;
@@ -158,10 +253,13 @@ async function syncEndpointStreaming(
       hasMore = false;
     } else {
       totalRecords = data.count || totalRecords;
-      pendingRecords.push(...results);
+      
+      // Remove duplicates before adding to pending
+      const uniqueResults = removeDuplicatesFromBatch(results);
+      pendingRecords.push(...uniqueResults);
       offset += PAGE_SIZE;
       
-      console.log(`[FETCH] Got ${results.length} records, pending: ${pendingRecords.length}, offset: ${offset}/${totalRecords}`);
+      console.log(`[FETCH] Got ${results.length} records (${uniqueResults.length} unique), pending: ${pendingRecords.length}, offset: ${offset}/${totalRecords}`);
       
       if (results.length < PAGE_SIZE || (data.count && offset >= data.count)) {
         hasMore = false;
@@ -186,6 +284,7 @@ async function syncEndpointStreaming(
         console.log(`[SYNC] Processed batch: ${processed} total (${result.created} new, ${result.updated} updated)`);
       } catch (batchError: any) {
         console.error(`[SYNC] Batch error:`, batchError.message);
+        // Continue with next batch instead of stopping
       }
 
       // Update log entry with progress periodically (every 500 records)
@@ -200,6 +299,9 @@ async function syncEndpointStreaming(
             error_message: `Em progresso: ${processed}/${totalRecords || '?'} registros`,
           })
           .eq('id', logEntryId);
+          
+        // Also save progress to extraction_configs
+        await updateExtractionProgress(supabase, connectionId, endpointId, offset, false, totalRecords);
       }
     }
   }
@@ -224,8 +326,13 @@ async function syncEndpointStreaming(
     }
   }
 
-  console.log(`[SYNC] Complete for ${endpointSlug}: processed=${processed}/${totalRecords}, created=${created}, updated=${updated}, timedOut=${timedOut}`);
-  return { processed, created, updated, timedOut, totalRecords };
+  const isComplete = !timedOut && !hasMore && pendingRecords.length === 0;
+  
+  // Save final progress
+  await updateExtractionProgress(supabase, connectionId, endpointId, offset, isComplete, totalRecords);
+
+  console.log(`[SYNC] Complete for ${endpointSlug}: processed=${processed}/${totalRecords}, created=${created}, updated=${updated}, timedOut=${timedOut}, isComplete=${isComplete}`);
+  return { processed, created, updated, timedOut, totalRecords, finalOffset: offset, isComplete };
 }
 
 serve(async (req) => {
@@ -242,7 +349,7 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     supabase = createClient(supabaseUrl, supabaseKey);
 
-    const { connectionId, endpoint, testOnly } = await req.json() as EskolareConfig;
+    const { connectionId, endpoint, testOnly, continueFromOffset = true } = await req.json() as EskolareConfig;
 
     if (!connectionId) {
       throw new Error('connectionId is required');
@@ -309,13 +416,14 @@ serve(async (req) => {
       throw new Error(`No endpoints found: ${endpointsError?.message}`);
     }
 
-    console.log(`Found ${endpoints.length} endpoints to sync`);
+    console.log(`Found ${endpoints.length} endpoint(s) to sync`);
 
     const results: Record<string, any> = {};
     let totalProcessed = 0;
     let totalCreated = 0;
     let totalUpdated = 0;
     let hadTimeout = false;
+    let allComplete = true;
 
     for (const ep of endpoints) {
       // Check global timeout
@@ -323,6 +431,7 @@ serve(async (req) => {
       if (elapsed > MAX_EXECUTION_TIME_MS) {
         console.log(`[MAIN] Global timeout after ${elapsed}ms, stopping before ${ep.slug}`);
         hadTimeout = true;
+        allComplete = false;
         break;
       }
 
@@ -345,13 +454,15 @@ serve(async (req) => {
         const result = await syncEndpointStreaming(
           supabase,
           connectionId,
+          ep.id,
           ep.slug,
           baseUrl,
           token,
           ep.path,
           ep.response_data_path || 'results',
           startTime,
-          logEntry.id
+          logEntry.id,
+          continueFromOffset
         );
 
         results[ep.slug] = result;
@@ -362,32 +473,26 @@ serve(async (req) => {
         if (result.timedOut) {
           hadTimeout = true;
         }
+        
+        if (!result.isComplete) {
+          allComplete = false;
+        }
 
         // Update log entry with final status
         await supabase
           .from('extraction_logs')
           .update({
-            status: result.timedOut ? 'error' : 'success',
+            status: result.isComplete ? 'success' : 'error',
             records_processed: result.processed,
             records_created: result.created,
             records_updated: result.updated,
             duration_ms: Date.now() - startTime,
             finished_at: new Date().toISOString(),
-            error_message: result.timedOut 
-              ? `Timeout - processado ${result.processed}/${result.totalRecords} registros` 
+            error_message: !result.isComplete 
+              ? `Incompleto - processado ${result.processed}/${result.totalRecords} (offset: ${result.finalOffset}). Continuará na próxima execução.` 
               : null,
           })
           .eq('id', logEntry.id);
-
-        // Update extraction config
-        await supabase
-          .from('extraction_configs')
-          .update({
-            last_sync_at: new Date().toISOString(),
-            next_sync_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-          })
-          .eq('connection_id', connectionId)
-          .eq('endpoint_id', ep.id);
 
         if (result.timedOut) {
           break;
@@ -396,6 +501,7 @@ serve(async (req) => {
       } catch (epError: any) {
         console.error(`Error syncing ${ep.slug}:`, epError);
         results[ep.slug] = { error: epError.message };
+        allComplete = false;
 
         if (logEntry) {
           await supabase
@@ -411,15 +517,16 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Sync complete. Total: processed=${totalProcessed}, created=${totalCreated}, updated=${totalUpdated}, hadTimeout=${hadTimeout}`);
+    console.log(`Sync complete. Total: processed=${totalProcessed}, created=${totalCreated}, updated=${totalUpdated}, hadTimeout=${hadTimeout}, allComplete=${allComplete}`);
 
     return new Response(
       JSON.stringify({
-        success: !hadTimeout,
+        success: allComplete,
         duration_ms: Date.now() - startTime,
         total: { processed: totalProcessed, created: totalCreated, updated: totalUpdated },
         endpoints: results,
         hadTimeout,
+        allComplete,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

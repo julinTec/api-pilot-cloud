@@ -525,10 +525,13 @@ export type Database = {
           endpoint_id: string
           extra_params: Json | null
           id: string
+          is_complete: boolean | null
           is_enabled: boolean
+          last_offset: number | null
           last_sync_at: string | null
           next_sync_at: string | null
           sync_frequency_minutes: number
+          total_records: number | null
           updated_at: string
         }
         Insert: {
@@ -537,10 +540,13 @@ export type Database = {
           endpoint_id: string
           extra_params?: Json | null
           id?: string
+          is_complete?: boolean | null
           is_enabled?: boolean
+          last_offset?: number | null
           last_sync_at?: string | null
           next_sync_at?: string | null
           sync_frequency_minutes?: number
+          total_records?: number | null
           updated_at?: string
         }
         Update: {
@@ -549,10 +555,13 @@ export type Database = {
           endpoint_id?: string
           extra_params?: Json | null
           id?: string
+          is_complete?: boolean | null
           is_enabled?: boolean
+          last_offset?: number | null
           last_sync_at?: string | null
           next_sync_at?: string | null
           sync_frequency_minutes?: number
+          total_records?: number | null
           updated_at?: string
         }
         Relationships: [
