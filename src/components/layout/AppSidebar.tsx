@@ -19,7 +19,6 @@ import {
   History, 
   Database, 
   Link2, 
-  Settings,
   Zap,
 } from 'lucide-react';
 
@@ -31,9 +30,6 @@ const mainItems = [
   { title: 'Endpoints', url: '/endpoints', icon: Link2 },
 ];
 
-const settingsItems = [
-  { title: 'Configurações', url: '/settings', icon: Settings },
-];
 
 export function AppSidebar() {
   const { state } = useSidebar();
@@ -85,31 +81,6 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>Sistema</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {settingsItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={isActive(item.url)}
-                    tooltip={item.title}
-                  >
-                    <NavLink
-                      to={item.url}
-                      className="flex items-center gap-3"
-                      activeClassName="bg-sidebar-accent text-sidebar-accent-foreground"
-                    >
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter className="p-4">

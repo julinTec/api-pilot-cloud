@@ -1,14 +1,23 @@
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 import { useConnections, useProviders, useExtractionLogs, useSyncConnection } from '@/hooks/useApi';
 import { PageHeader } from '@/components/ui/page-header';
 import { StatCard } from '@/components/ui/stat-card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Plug, RefreshCw, History, Database, Plus, Zap } from 'lucide-react';
+import { Plug, RefreshCw, History, Database, Plus, Zap, ShoppingCart, CreditCard, GraduationCap, FileText } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+
+const activeEndpoints = [
+  { key: 'eskolare_orders', name: 'Pedidos', icon: ShoppingCart },
+  { key: 'eskolare_payments', name: 'Pagamentos', icon: CreditCard },
+  { key: 'eskolare_grades', name: 'Séries', icon: GraduationCap },
+  { key: 'eskolare_order_details', name: 'Detalhes', icon: FileText },
+];
 
 export default function Dashboard() {
   const { data: connections = [], isLoading: loadingConnections } = useConnections();
@@ -16,8 +25,25 @@ export default function Dashboard() {
   const { data: logs = [] } = useExtractionLogs(undefined, 10);
   const syncMutation = useSyncConnection();
 
+  // Fetch real counts for each active endpoint
+  const { data: endpointCounts = {} } = useQuery({
+    queryKey: ['endpoint-counts'],
+    queryFn: async () => {
+      const results: Record<string, number> = {};
+      
+      for (const ep of activeEndpoints) {
+        const { count } = await supabase
+          .from(ep.key as any)
+          .select('*', { count: 'exact', head: true });
+        results[ep.key] = count || 0;
+      }
+      
+      return results;
+    },
+  });
+
   const activeConnections = connections.filter(c => c.status === 'active').length;
-  const totalRecords = logs.reduce((sum, log) => sum + (log.records_processed || 0), 0);
+  const totalRecords = Object.values(endpointCounts).reduce((sum, count) => sum + count, 0);
   const successRate = logs.length > 0 
     ? Math.round((logs.filter(l => l.status === 'success').length / logs.length) * 100) 
     : 0;
@@ -45,11 +71,29 @@ export default function Dashboard() {
         </Button>
       </PageHeader>
 
+      {/* Main Stats */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Provedores" value={providers.length} icon={Zap} subtitle="APIs disponíveis" />
+        <StatCard title="Endpoints Ativos" value={activeEndpoints.length} icon={Zap} subtitle="endpoints configurados" />
         <StatCard title="Conexões Ativas" value={activeConnections} icon={Plug} subtitle={`de ${connections.length} total`} />
-        <StatCard title="Registros Sincronizados" value={totalRecords.toLocaleString()} icon={Database} subtitle="últimas execuções" />
+        <StatCard title="Total de Registros" value={totalRecords.toLocaleString()} icon={Database} subtitle="em todas as tabelas" />
         <StatCard title="Taxa de Sucesso" value={`${successRate}%`} icon={History} subtitle="nas últimas execuções" />
+      </div>
+
+      {/* Endpoint Stats */}
+      <div className="mt-6 grid gap-4 md:grid-cols-4">
+        {activeEndpoints.map((ep) => (
+          <Card key={ep.key} className="border-l-4 border-l-primary">
+            <CardContent className="flex items-center gap-3 p-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <ep.icon className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold">{(endpointCounts[ep.key] || 0).toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">{ep.name}</p>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
