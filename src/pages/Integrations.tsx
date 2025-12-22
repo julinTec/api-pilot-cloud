@@ -80,12 +80,14 @@ export default function Integrations() {
       const result = await syncMutation.mutateAsync({ connectionId });
       
       if (result.success) {
-        const { total, endpoints: syncedEndpoints } = result;
+        // Tratamento defensivo para estrutura de resposta
+        const total = result.total || { processed: 0, created: 0, updated: 0 };
+        const syncedEndpoints = result.endpoints || {};
         
         // Check for endpoint errors
         const errors = Object.entries(syncedEndpoints)
-          .filter(([_, data]: [string, any]) => data.error)
-          .map(([name, data]: [string, any]) => `${name}: ${data.error.substring(0, 80)}`);
+          .filter(([_, data]: [string, any]) => data?.error)
+          .map(([name, data]: [string, any]) => `${name}: ${String(data.error).substring(0, 80)}`);
 
         if (errors.length > 0 && total.processed === 0) {
           // All endpoints failed
@@ -99,10 +101,15 @@ export default function Integrations() {
             `Sincronização parcial!\n\nSucesso: ${total.processed} registros\nErros em: ${errors.length} endpoints\n\n${errors.join('\n')}`,
             { id: toastId, duration: 10000 }
           );
+        } else if (total.processed === 0 && result.message) {
+          // No records processed but has message (e.g., all synced)
+          toast.success(result.message, { id: toastId, duration: 5000 });
         } else {
           // Full success
+          const endpointName = result.endpoint ? ` (${result.endpoint})` : '';
+          const durationMs = result.duration_ms || 0;
           toast.success(
-            `Sincronização concluída!\n\nTotal: ${total.processed} registros\nCriados: ${total.created} | Atualizados: ${total.updated}\nTempo: ${(result.duration_ms / 1000).toFixed(1)}s`,
+            `Sincronização concluída${endpointName}!\n\nTotal: ${total.processed} registros\nCriados: ${total.created} | Atualizados: ${total.updated}\nTempo: ${(durationMs / 1000).toFixed(1)}s`,
             { id: toastId, duration: 8000 }
           );
         }
