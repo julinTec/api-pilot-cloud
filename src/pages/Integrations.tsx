@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Plug, RefreshCw, Settings, CheckCircle, XCircle, Zap, Loader2 } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Plus, Plug, RefreshCw, Settings, CheckCircle, XCircle, Zap, Loader2, ChevronDown, RefreshCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConnectionSettingsModal } from '@/components/integrations/ConnectionSettingsModal';
 
@@ -80,32 +81,23 @@ export default function Integrations() {
       const result = await syncMutation.mutateAsync({ connectionId });
       
       if (result.success) {
-        // Tratamento defensivo para estrutura de resposta
         const total = result.total || { processed: 0, created: 0, updated: 0 };
         const syncedEndpoints = result.endpoints || {};
         
-        // Check for endpoint errors
         const errors = Object.entries(syncedEndpoints)
           .filter(([_, data]: [string, any]) => data?.error)
           .map(([name, data]: [string, any]) => `${name}: ${String(data.error).substring(0, 80)}`);
 
         if (errors.length > 0 && total.processed === 0) {
-          // All endpoints failed
-          toast.error(
-            `Sincronização falhou!\n\n${errors.join('\n')}`,
-            { id: toastId, duration: 10000 }
-          );
+          toast.error(`Sincronização falhou!\n\n${errors.join('\n')}`, { id: toastId, duration: 10000 });
         } else if (errors.length > 0) {
-          // Partial success
           toast.warning(
             `Sincronização parcial!\n\nSucesso: ${total.processed} registros\nErros em: ${errors.length} endpoints\n\n${errors.join('\n')}`,
             { id: toastId, duration: 10000 }
           );
         } else if (total.processed === 0 && result.message) {
-          // No records processed but has message (e.g., all synced)
           toast.success(result.message, { id: toastId, duration: 5000 });
         } else {
-          // Full success
           const endpointName = result.endpoint ? ` (${result.endpoint})` : '';
           const durationMs = result.duration_ms || 0;
           toast.success(
@@ -114,9 +106,61 @@ export default function Integrations() {
           );
         }
       } else {
-        // Overall failure - show actual error or a meaningful message
         const errorMsg = result.error || result.message || 'Erro desconhecido na sincronização';
         toast.error(`Erro na sincronização: ${errorMsg}`, { id: toastId, duration: 10000 });
+      }
+    } catch (error: any) {
+      toast.error(`Erro crítico: ${error.message}`, { id: toastId, duration: 10000 });
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const handleSyncAll = async (connectionId: string, connectionName: string) => {
+    setSyncingId(connectionId);
+    const toastId = toast.loading(`Iniciando sincronização completa de ${connectionName}...`);
+    let totalProcessed = 0, totalCreated = 0, totalUpdated = 0;
+    let completedEndpoints = 0;
+    let hasError = false;
+    
+    try {
+      while (true) {
+        const result = await syncMutation.mutateAsync({ connectionId });
+        
+        if (!result.success) {
+          const errorMsg = result.error || result.message || 'Erro desconhecido';
+          toast.error(`Erro na sincronização: ${errorMsg}`, { id: toastId, duration: 10000 });
+          hasError = true;
+          break;
+        }
+        
+        // Check if all endpoints are synced
+        if (result.message === 'Todos os endpoints estão sincronizados' || 
+            result.message?.includes('sincronizados')) {
+          break;
+        }
+        
+        const total = result.total || { processed: 0, created: 0, updated: 0 };
+        totalProcessed += total.processed;
+        totalCreated += total.created;
+        totalUpdated += total.updated;
+        completedEndpoints++;
+        
+        const endpointName = result.endpoint || 'endpoint';
+        toast.loading(
+          `${endpointName} concluído ✓\n\n${completedEndpoints} endpoints | ${totalProcessed} registros`,
+          { id: toastId }
+        );
+        
+        // Small delay to prevent overwhelming the server
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
+      if (!hasError) {
+        toast.success(
+          `Sincronização completa!\n\n${completedEndpoints} endpoints processados\nTotal: ${totalProcessed} registros\nCriados: ${totalCreated} | Atualizados: ${totalUpdated}`,
+          { id: toastId, duration: 10000 }
+        );
       }
     } catch (error: any) {
       toast.error(`Erro crítico: ${error.message}`, { id: toastId, duration: 10000 });
@@ -237,20 +281,34 @@ export default function Integrations() {
                         )}
                         Testar
                       </Button>
-                      <Button 
-                        variant="default" 
-                        size="sm" 
-                        className="flex-1" 
-                        onClick={() => handleSync(conn.id, conn.name)} 
-                        disabled={isSyncing || isTesting}
-                      >
-                        {isSyncing ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="mr-2 h-4 w-4" />
-                        )}
-                        Sincronizar
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button 
+                            variant="default" 
+                            size="sm" 
+                            className="flex-1" 
+                            disabled={isSyncing || isTesting}
+                          >
+                            {isSyncing ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="mr-2 h-4 w-4" />
+                            )}
+                            Sincronizar
+                            <ChevronDown className="ml-2 h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleSync(conn.id, conn.name)}>
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                            Próximo Pendente
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSyncAll(conn.id, conn.name)}>
+                            <RefreshCcw className="mr-2 h-4 w-4" />
+                            Sincronizar Tudo
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <Button 
                         variant="ghost" 
                         size="sm" 
