@@ -19,15 +19,9 @@ const ORDER_DETAILS_BATCH_SIZE = 200;
 // PRIORITY ORDER - Execute endpoints in this exact order
 const ENDPOINT_PRIORITY = [
   'orders',        // 1º - Base de tudo
-  'showcases',     // 2º - Catálogos
-  'payments',      // 3º - Pagamentos
-  'partnerships',  // 4º - Parcerias
-  'grades',        // 5º - Séries
-  'categories',    // 6º - Categorias
-  'cancellations', // 7º - Cancelamentos
-  'withdrawals',   // 8º - Saques
-  'order-details', // 9º - Detalhes (depende de orders)
-  'transactions',  // 10º - Maior volume, por último
+  'payments',      // 2º - Pagamentos
+  'grades',        // 3º - Séries
+  'order-details', // 4º - Detalhes (depende de orders)
 ];
 
 // Status priority for order-details
