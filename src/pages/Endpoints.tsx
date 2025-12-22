@@ -11,14 +11,8 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const endpoints = [
   { provider: 'eskolare', endpoint: 'orders', name: 'Pedidos', description: 'Todos os pedidos sincronizados' },
   { provider: 'eskolare', endpoint: 'payments', name: 'Pagamentos', description: 'Todos os pagamentos' },
-  { provider: 'eskolare', endpoint: 'cancellations', name: 'Cancelamentos', description: 'Pedidos cancelados' },
-  { provider: 'eskolare', endpoint: 'partnerships', name: 'Parcerias', description: 'Parcerias ativas' },
-  { provider: 'eskolare', endpoint: 'summaries', name: 'Resumos', description: 'Dados consolidados' },
-  { provider: 'eskolare', endpoint: 'transactions', name: 'Transações', description: 'Transações financeiras' },
-  { provider: 'eskolare', endpoint: 'categories', name: 'Categorias', description: 'Categorias de produtos' },
   { provider: 'eskolare', endpoint: 'grades', name: 'Séries', description: 'Séries/Anos escolares' },
-  { provider: 'eskolare', endpoint: 'showcases', name: 'Vitrines', description: 'Vitrines de produtos' },
-  { provider: 'eskolare', endpoint: 'withdrawals', name: 'Saques', description: 'Saques realizados' },
+  { provider: 'eskolare', endpoint: 'order-details', name: 'Detalhes do Pedido', description: 'Detalhes completos de cada pedido' },
 ];
 
 export default function Endpoints() {

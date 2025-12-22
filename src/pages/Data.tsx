@@ -12,18 +12,13 @@ import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
-type TableName = 'eskolare_orders' | 'eskolare_payments' | 'eskolare_cancellations' | 'eskolare_partnerships' | 'eskolare_grades' | 'eskolare_showcases' | 'eskolare_withdrawals' | 'eskolare_transactions' | 'eskolare_categories';
+type TableName = 'eskolare_orders' | 'eskolare_payments' | 'eskolare_grades' | 'eskolare_order_details';
 
 const tableOptions: { value: TableName; label: string }[] = [
   { value: 'eskolare_orders', label: 'Pedidos' },
   { value: 'eskolare_payments', label: 'Pagamentos' },
-  { value: 'eskolare_cancellations', label: 'Cancelamentos' },
-  { value: 'eskolare_partnerships', label: 'Parcerias' },
   { value: 'eskolare_grades', label: 'Séries' },
-  { value: 'eskolare_showcases', label: 'Vitrines' },
-  { value: 'eskolare_withdrawals', label: 'Saques' },
-  { value: 'eskolare_transactions', label: 'Transações' },
-  { value: 'eskolare_categories', label: 'Categorias' },
+  { value: 'eskolare_order_details', label: 'Detalhes do Pedido' },
 ];
 
 export default function Data() {
@@ -119,7 +114,7 @@ export default function Data() {
       </div>
 
       {/* Stats Cards */}
-      <div className="mb-6 grid gap-4 md:grid-cols-5">
+      <div className="mb-6 grid gap-4 md:grid-cols-4">
         {tableOptions.map((table) => (
           <Card 
             key={table.value} 
