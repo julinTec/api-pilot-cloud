@@ -7,8 +7,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const MAX_EXECUTION_TIME_MS = 50000; // 50 seconds (leave 10s buffer)
-const BATCH_SIZE = 50;
+const MAX_EXECUTION_TIME_MS = 55000; // 55 seconds (leave 5s buffer for cleanup)
+const BATCH_SIZE = 100; // Larger batches for efficiency
 const PAGE_SIZE = 500;
 
 interface EskolareConfig {
@@ -196,11 +196,14 @@ async function syncEndpointStreaming(
   
   // Get last progress if continuing
   let startOffset = 0;
+  let previousTotalRecords = 0;
   if (continueFromOffset) {
     const config = await getExtractionConfig(supabase, connectionId, endpointId);
     if (config && !config.isComplete) {
+      // Continue from where we left off (use lastOffset as starting point for API)
       startOffset = config.lastOffset;
-      console.log(`[SYNC] Continuing from offset ${startOffset} (was incomplete)`);
+      previousTotalRecords = config.totalRecords;
+      console.log(`[SYNC] Continuing from offset ${startOffset} (was incomplete, total: ${previousTotalRecords})`);
     } else if (config?.isComplete) {
       // If complete, start fresh
       startOffset = 0;
@@ -297,8 +300,8 @@ async function syncEndpointStreaming(
         // Continue with next batch instead of stopping
       }
 
-      // Update log entry with progress periodically (every 500 records)
-      if (processed % 500 === 0) {
+      // Update log entry with progress periodically (every 200 records for faster feedback)
+      if (processed % 200 === 0) {
         await supabase
           .from('extraction_logs')
           .update({
@@ -306,11 +309,11 @@ async function syncEndpointStreaming(
             records_created: created,
             records_updated: updated,
             duration_ms: Date.now() - startTime,
-            error_message: `Em progresso: ${processed}/${totalRecords || '?'} registros`,
+            error_message: `Em progresso: ${processed}/${totalRecords || '?'} (offset: ${offset})`,
           })
           .eq('id', logEntryId);
           
-        // Also save progress to extraction_configs
+        // Save progress more frequently to extraction_configs
         await updateExtractionProgress(supabase, connectionId, endpointId, offset, false, totalRecords);
       }
     }
