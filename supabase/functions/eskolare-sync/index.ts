@@ -11,6 +11,27 @@ const MAX_EXECUTION_TIME_MS = 55000; // 55 seconds (leave 5s buffer for cleanup)
 const BATCH_SIZE = 100; // Larger batches for efficiency
 const PAGE_SIZE = 500;
 
+// Order details specific constants
+const ORDER_DETAILS_PARALLEL_REQUESTS = 10; // 10 parallel requests
+const ORDER_DETAILS_BATCH_SIZE = 200; // 200 orders per execution
+
+// Status priority configuration
+const STATUS_PRIORITY = {
+  // High priority - sync every 15 minutes (active orders)
+  high: ['order-created', 'payment-pending', 'payment-approved'],
+  // Medium priority - sync once a day (finalized but might have updates)
+  medium: ['invoiced'],
+  // Low priority - sync only once (final states)
+  low: ['canceled', 'payment-denied', 'returned'],
+};
+
+// Max age in minutes for each priority level
+const PRIORITY_MAX_AGE_MINUTES = {
+  high: 15,      // Re-sync every 15 minutes
+  medium: 1440,  // Re-sync once a day (24 hours)
+  low: null,     // Never re-sync (only sync once)
+};
+
 interface EskolareConfig {
   connectionId: string;
   endpoint?: string;
@@ -157,7 +178,7 @@ async function updateExtractionProgress(
       is_complete: isComplete,
       total_records: totalRecords,
       last_sync_at: new Date().toISOString(),
-      next_sync_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2 hours
+      next_sync_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes for order-details
       updated_at: new Date().toISOString(),
     })
     .eq('connection_id', connectionId)
@@ -175,9 +196,315 @@ async function updateExtractionProgress(
         is_complete: isComplete,
         total_records: totalRecords,
         last_sync_at: new Date().toISOString(),
-        next_sync_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+        next_sync_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       });
   }
+}
+
+// Get orders that need their details synced, prioritized by status
+async function getOrdersNeedingDetails(
+  supabase: any,
+  connectionId: string,
+  limit: number
+): Promise<{ orderNumber: string; orderUid: string; status: string; priority: string }[]> {
+  const ordersToSync: { orderNumber: string; orderUid: string; status: string; priority: string }[] = [];
+  
+  // Helper function to get orders by priority
+  async function getOrdersByPriority(
+    priority: string,
+    statuses: string[],
+    maxAgeMinutes: number | null
+  ): Promise<void> {
+    const remainingSlots = limit - ordersToSync.length;
+    if (remainingSlots <= 0) return;
+
+    // Get all orders with these statuses
+    const { data: orders, error: ordersError } = await supabase
+      .from('eskolare_orders')
+      .select('external_id, data')
+      .eq('connection_id', connectionId);
+
+    if (ordersError || !orders) {
+      console.error(`[PRIORITY] Error fetching orders:`, ordersError);
+      return;
+    }
+
+    // Filter orders by status
+    const filteredOrders = orders.filter((order: any) => {
+      const orderStatus = order.data?.status || order.data?.order_status;
+      return statuses.includes(orderStatus);
+    });
+
+    if (filteredOrders.length === 0) return;
+
+    // Get order numbers
+    const orderNumbers = filteredOrders.map((o: any) => o.data?.order_number?.toString() || o.external_id);
+
+    // Get existing order details
+    const { data: existingDetails } = await supabase
+      .from('eskolare_order_details')
+      .select('external_id, details_synced_at')
+      .eq('connection_id', connectionId)
+      .in('external_id', orderNumbers);
+
+    const existingDetailsMap = new Map(
+      (existingDetails || []).map((d: any) => [d.external_id, d.details_synced_at])
+    );
+
+    const now = new Date();
+    const cutoffTime = maxAgeMinutes !== null 
+      ? new Date(now.getTime() - maxAgeMinutes * 60 * 1000)
+      : null;
+
+    // Filter orders that need sync
+    for (const order of filteredOrders) {
+      if (ordersToSync.length >= limit) break;
+
+      const orderNumber = order.data?.order_number?.toString() || order.external_id;
+      const orderUid = order.data?.uid?.toString() || order.external_id;
+      const orderStatus = order.data?.status || order.data?.order_status || 'unknown';
+      const existingSyncTime = existingDetailsMap.get(orderNumber);
+
+      let needsSync = false;
+      if (!existingSyncTime) {
+        // Never synced
+        needsSync = true;
+      } else if (maxAgeMinutes !== null && cutoffTime && typeof existingSyncTime === 'string') {
+        // Check if sync is stale
+        const syncTime = new Date(existingSyncTime);
+        needsSync = syncTime < cutoffTime;
+      }
+      // For low priority (maxAgeMinutes === null), don't re-sync if already exists
+
+      if (needsSync) {
+        ordersToSync.push({
+          orderNumber,
+          orderUid,
+          status: orderStatus,
+          priority,
+        });
+      }
+    }
+
+    console.log(`[PRIORITY] ${priority}: Found ${ordersToSync.length} orders needing sync (from ${filteredOrders.length} with matching status)`);
+  }
+
+  // Process priorities in order
+  await getOrdersByPriority('high', STATUS_PRIORITY.high, PRIORITY_MAX_AGE_MINUTES.high);
+  await getOrdersByPriority('medium', STATUS_PRIORITY.medium, PRIORITY_MAX_AGE_MINUTES.medium);
+  await getOrdersByPriority('low', STATUS_PRIORITY.low, PRIORITY_MAX_AGE_MINUTES.low);
+
+  console.log(`[PRIORITY] Total orders to sync: ${ordersToSync.length} (high priority first)`);
+  return ordersToSync;
+}
+
+// Fetch order details from API
+async function fetchOrderDetails(
+  baseUrl: string,
+  token: string,
+  orderNumber: string
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const url = `${baseUrl}/orders/${orderNumber}/`;
+    
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    
+    const response = await fetch(url, { headers });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return { success: false, error: `HTTP ${response.status}: ${errorText.substring(0, 100)}` };
+    }
+
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+// Process order details in parallel
+async function processOrderDetailsParallel(
+  supabase: any,
+  connectionId: string,
+  baseUrl: string,
+  token: string,
+  orders: { orderNumber: string; orderUid: string; status: string; priority: string }[],
+  startTime: number
+): Promise<{ processed: number; created: number; updated: number; errors: number; timedOut: boolean }> {
+  let processed = 0;
+  let created = 0;
+  let updated = 0;
+  let errors = 0;
+  let timedOut = false;
+
+  // Process in chunks of PARALLEL_REQUESTS
+  for (let i = 0; i < orders.length; i += ORDER_DETAILS_PARALLEL_REQUESTS) {
+    // Check timeout
+    const elapsed = Date.now() - startTime;
+    if (elapsed > MAX_EXECUTION_TIME_MS) {
+      console.log(`[ORDER-DETAILS] Timeout at ${processed} orders processed`);
+      timedOut = true;
+      break;
+    }
+
+    const chunk = orders.slice(i, i + ORDER_DETAILS_PARALLEL_REQUESTS);
+    console.log(`[ORDER-DETAILS] Processing chunk ${Math.floor(i / ORDER_DETAILS_PARALLEL_REQUESTS) + 1}: ${chunk.length} orders in parallel`);
+
+    // Fetch all order details in parallel
+    const fetchPromises = chunk.map(order => 
+      fetchOrderDetails(baseUrl, token, order.orderNumber)
+        .then(result => ({ ...result, order }))
+    );
+
+    const results = await Promise.all(fetchPromises);
+
+    // Prepare batch for upsert
+    const successfulResults = results.filter(r => r.success && r.data);
+    const failedResults = results.filter(r => !r.success);
+
+    if (failedResults.length > 0) {
+      console.log(`[ORDER-DETAILS] ${failedResults.length} failed in this chunk`);
+      errors += failedResults.length;
+    }
+
+    if (successfulResults.length > 0) {
+      // Get existing records to count created vs updated
+      const orderNumbers = successfulResults.map(r => r.order.orderNumber);
+      const { data: existingDetails } = await supabase
+        .from('eskolare_order_details')
+        .select('external_id')
+        .eq('connection_id', connectionId)
+        .in('external_id', orderNumbers);
+
+      const existingIds = new Set((existingDetails || []).map((d: any) => d.external_id));
+
+      // Prepare upsert data
+      const upsertData = successfulResults.map(r => ({
+        connection_id: connectionId,
+        external_id: r.order.orderNumber,
+        order_uid: r.order.orderUid,
+        order_status: r.order.status,
+        data: r.data,
+        details_synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }));
+
+      // Count created vs updated
+      const newCreated = upsertData.filter(d => !existingIds.has(d.external_id)).length;
+      const newUpdated = upsertData.length - newCreated;
+
+      // Upsert batch
+      const { error: upsertError } = await supabase
+        .from('eskolare_order_details')
+        .upsert(upsertData, {
+          onConflict: 'connection_id,external_id',
+          ignoreDuplicates: false,
+        });
+
+      if (upsertError) {
+        console.error(`[ORDER-DETAILS] Upsert error:`, upsertError.message);
+        errors += upsertData.length;
+      } else {
+        created += newCreated;
+        updated += newUpdated;
+        processed += successfulResults.length;
+      }
+    }
+
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  return { processed, created, updated, errors, timedOut };
+}
+
+// Sync order details endpoint (special handling)
+async function syncOrderDetails(
+  supabase: any,
+  connectionId: string,
+  endpointId: string,
+  baseUrl: string,
+  token: string,
+  startTime: number,
+  logEntryId: string
+): Promise<{ processed: number; created: number; updated: number; timedOut: boolean; totalRecords: number; finalOffset: number; isComplete: boolean }> {
+  console.log(`[ORDER-DETAILS] Starting intelligent sync for order details`);
+
+  // Get orders that need their details synced (prioritized by status)
+  const ordersToSync = await getOrdersNeedingDetails(supabase, connectionId, ORDER_DETAILS_BATCH_SIZE);
+
+  if (ordersToSync.length === 0) {
+    console.log(`[ORDER-DETAILS] No orders need sync at this time`);
+    return {
+      processed: 0,
+      created: 0,
+      updated: 0,
+      timedOut: false,
+      totalRecords: 0,
+      finalOffset: 0,
+      isComplete: true,
+    };
+  }
+
+  // Log priority distribution
+  const highPriority = ordersToSync.filter(o => o.priority === 'high').length;
+  const mediumPriority = ordersToSync.filter(o => o.priority === 'medium').length;
+  const lowPriority = ordersToSync.filter(o => o.priority === 'low').length;
+  console.log(`[ORDER-DETAILS] Priority distribution: high=${highPriority}, medium=${mediumPriority}, low=${lowPriority}`);
+
+  // Process orders in parallel
+  const result = await processOrderDetailsParallel(
+    supabase,
+    connectionId,
+    baseUrl,
+    token,
+    ordersToSync,
+    startTime
+  );
+
+  // Update progress in log
+  await supabase
+    .from('extraction_logs')
+    .update({
+      records_processed: result.processed,
+      records_created: result.created,
+      records_updated: result.updated,
+      duration_ms: Date.now() - startTime,
+      error_message: result.errors > 0 
+        ? `${result.errors} errors during sync` 
+        : null,
+    })
+    .eq('id', logEntryId);
+
+  // Determine if complete (all orders that needed sync were processed)
+  const isComplete = !result.timedOut && result.processed >= ordersToSync.length;
+
+  // Update extraction config
+  await updateExtractionProgress(
+    supabase,
+    connectionId,
+    endpointId,
+    result.processed,
+    isComplete,
+    ordersToSync.length
+  );
+
+  console.log(`[ORDER-DETAILS] Complete: processed=${result.processed}, created=${result.created}, updated=${result.updated}, errors=${result.errors}, timedOut=${result.timedOut}`);
+
+  return {
+    processed: result.processed,
+    created: result.created,
+    updated: result.updated,
+    timedOut: result.timedOut,
+    totalRecords: ordersToSync.length,
+    finalOffset: result.processed,
+    isComplete,
+  };
 }
 
 // Sync endpoint with streaming processing and incremental support
@@ -471,19 +798,34 @@ serve(async (req) => {
       logEntry = newLogEntry;
 
       try {
-        const result = await syncEndpointStreaming(
-          supabase,
-          connectionId,
-          ep.id,
-          ep.slug,
-          baseUrl,
-          token,
-          ep.path,
-          ep.response_data_path || 'results',
-          startTime,
-          logEntry.id,
-          continueFromOffset
-        );
+        let result;
+        
+        // Special handling for order-details endpoint
+        if (ep.slug === 'order-details') {
+          result = await syncOrderDetails(
+            supabase,
+            connectionId,
+            ep.id,
+            baseUrl,
+            token,
+            startTime,
+            logEntry.id
+          );
+        } else {
+          result = await syncEndpointStreaming(
+            supabase,
+            connectionId,
+            ep.id,
+            ep.slug,
+            baseUrl,
+            token,
+            ep.path,
+            ep.response_data_path || 'results',
+            startTime,
+            logEntry.id,
+            continueFromOffset
+          );
+        }
 
         results[ep.slug] = result;
         totalProcessed += result.processed;
