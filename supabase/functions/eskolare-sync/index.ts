@@ -526,12 +526,21 @@ async function syncSingleEndpoint(
       const uniqueResults = removeDuplicatesFromBatch(results);
       pendingRecords.push(...uniqueResults);
       
-      console.log(`[FETCH] Got ${results.length} records (${uniqueResults.length} unique), total: ${pendingRecords.length}, offset: ${offset}/${totalRecords}`);
+      // CRITICAL FIX: Increment offset by ACTUAL records returned, not PAGE_SIZE
+      // The API may return fewer records than requested
+      const actualRecordsReturned = results.length;
+      console.log(`[FETCH] Got ${actualRecordsReturned} records (${uniqueResults.length} unique), total pending: ${pendingRecords.length}, offset: ${offset}/${totalRecords}`);
       
-      offset += PAGE_SIZE;
+      offset += actualRecordsReturned;
       
       if (totalRecords > 0 && offset >= totalRecords) {
         console.log(`[FETCH] Reached end: offset ${offset} >= total ${totalRecords}`);
+        hasMore = false;
+      }
+      
+      // Also stop if we got fewer records than requested (no more available)
+      if (actualRecordsReturned < PAGE_SIZE && totalRecords === 0) {
+        console.log(`[FETCH] Got fewer records than requested (${actualRecordsReturned}/${PAGE_SIZE}), assuming end of data`);
         hasMore = false;
       }
     }
