@@ -80,8 +80,8 @@ serve(async (req) => {
       );
     }
 
-    // Fetch data from the appropriate table
-    const tableName = `${provider}_${endpoint}`;
+    // Fetch data from the appropriate table (normalize endpoint: replace hyphens with underscores)
+    const tableName = `${provider}_${endpoint.replace(/-/g, '_')}`;
     
     // If fetchAll is true, we need to paginate through all records
     if (fetchAll) {
