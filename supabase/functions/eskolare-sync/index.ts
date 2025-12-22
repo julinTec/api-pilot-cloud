@@ -48,6 +48,7 @@ interface SyncRequest {
   endpoint?: string;      // If specified, sync only this endpoint
   testOnly?: boolean;
   forceReset?: boolean;   // Reset progress and start from zero
+  forceClean?: boolean;   // Delete all records and re-sync from scratch
 }
 
 interface EndpointStatus {
@@ -61,14 +62,64 @@ interface EndpointStatus {
   recordsInDb: number;
 }
 
+// ============================================================================
+// FUNÇÃO getExternalId ROBUSTA E DETERMINÍSTICA
+// Prioridade: uid > order_number > id > uuid > code > slug > hash determinístico
+// ============================================================================
 function getExternalId(record: any): string {
-  return record.uid?.toString() || 
-         record.id?.toString() || 
-         record.uuid?.toString() || 
-         record.order_id?.toString() || 
-         record.code?.toString() ||
-         record.slug?.toString() ||
-         `hash_${JSON.stringify(record).length}_${JSON.stringify(record).substring(0, 100)}`;
+  // 1. uid - identificador mais confiável
+  if (record.uid !== undefined && record.uid !== null) {
+    return String(record.uid);
+  }
+  
+  // 2. order_number - para pedidos
+  if (record.order_number !== undefined && record.order_number !== null) {
+    return String(record.order_number);
+  }
+  
+  // 3. id - identificador genérico
+  if (record.id !== undefined && record.id !== null) {
+    return String(record.id);
+  }
+  
+  // 4. uuid - alternativo
+  if (record.uuid !== undefined && record.uuid !== null) {
+    return String(record.uuid);
+  }
+  
+  // 5. order_id - para transações relacionadas a pedidos
+  if (record.order_id !== undefined && record.order_id !== null) {
+    return String(record.order_id);
+  }
+  
+  // 6. code - para categorias/grades
+  if (record.code !== undefined && record.code !== null) {
+    return String(record.code);
+  }
+  
+  // 7. slug - para endpoints com slug único
+  if (record.slug !== undefined && record.slug !== null) {
+    return String(record.slug);
+  }
+  
+  // 8. Fallback: hash determinístico baseado em campos estáveis
+  const stableKey = JSON.stringify({
+    name: record.name,
+    created_at: record.created_at,
+    type: record.type,
+  });
+  return `hash_${hashCode(stableKey)}`;
+}
+
+// Função de hash determinística
+function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash);
 }
 
 function removeDuplicatesFromBatch(records: any[]): any[] {
@@ -78,6 +129,35 @@ function removeDuplicatesFromBatch(records: any[]): any[] {
     seen.set(externalId, record);
   }
   return Array.from(seen.values());
+}
+
+// ============================================================================
+// LIMPEZA DE DADOS - Remove todos os registros antes de re-sync
+// ============================================================================
+async function cleanTableData(
+  supabase: any,
+  tableName: string,
+  connectionId: string
+): Promise<number> {
+  console.log(`[CLEAN] Removing all records from ${tableName} for connection ${connectionId}`);
+  
+  const { count: beforeCount } = await supabase
+    .from(tableName)
+    .select('*', { count: 'exact', head: true })
+    .eq('connection_id', connectionId);
+  
+  const { error } = await supabase
+    .from(tableName)
+    .delete()
+    .eq('connection_id', connectionId);
+  
+  if (error) {
+    console.error(`[CLEAN] Error cleaning ${tableName}:`, error.message);
+    throw error;
+  }
+  
+  console.log(`[CLEAN] Removed ${beforeCount || 0} records from ${tableName}`);
+  return beforeCount || 0;
 }
 
 async function testConnection(baseUrl: string, token: string): Promise<{ success: boolean; data?: any; error?: string }> {
@@ -312,7 +392,7 @@ async function resetExtractionProgress(
     .eq('endpoint_id', endpointId);
 }
 
-// Validate sync completeness
+// Validate sync completeness - conta registros ÚNICOS
 async function validateSyncCompleteness(
   supabase: any,
   tableName: string,
@@ -325,9 +405,14 @@ async function validateSyncCompleteness(
     .eq('connection_id', connectionId);
 
   const actualCount = count ?? 0;
-  const isValid = actualCount >= expectedTotal;
+  // Agora validamos se é IGUAL (não maior ou igual, para detectar duplicatas)
+  const isValid = actualCount === expectedTotal;
 
-  console.log(`[VALIDATION] ${tableName}: ${actualCount}/${expectedTotal} - ${isValid ? 'COMPLETE ✓' : 'INCOMPLETE'}`);
+  if (!isValid) {
+    console.warn(`[VALIDATION] ${tableName}: ${actualCount}/${expectedTotal} - ${actualCount > expectedTotal ? 'DUPLICATAS DETECTADAS' : 'INCOMPLETO'}`);
+  } else {
+    console.log(`[VALIDATION] ${tableName}: ${actualCount}/${expectedTotal} - COMPLETE ✓`);
+  }
 
   return { isValid, actualCount, expectedCount: expectedTotal };
 }
@@ -340,7 +425,8 @@ async function syncSingleEndpoint(
   baseUrl: string,
   token: string,
   startTime: number,
-  forceReset: boolean = false
+  forceReset: boolean = false,
+  forceClean: boolean = false
 ): Promise<{ 
   processed: number; 
   created: number; 
@@ -350,12 +436,20 @@ async function syncSingleEndpoint(
   finalOffset: number; 
   isComplete: boolean;
   validation: { isValid: boolean; actualCount: number; expectedCount: number } | null;
+  cleaned?: number;
 }> {
   const tableName = `eskolare_${endpoint.slug}`;
   console.log(`[SYNC] Starting sync for: ${endpoint.slug} -> ${tableName}`);
 
-  // Reset if forced
-  if (forceReset) {
+  let cleaned = 0;
+
+  // Clean data if forced
+  if (forceClean) {
+    console.log(`[SYNC] Force clean requested for ${endpoint.slug}`);
+    cleaned = await cleanTableData(supabase, tableName, connectionId);
+    await resetExtractionProgress(supabase, connectionId, endpoint.id);
+  } else if (forceReset) {
+    // Reset only progress, keep data
     console.log(`[SYNC] Force reset requested for ${endpoint.slug}`);
     await resetExtractionProgress(supabase, connectionId, endpoint.id);
   }
@@ -365,7 +459,7 @@ async function syncSingleEndpoint(
   
   // Determine starting offset
   let startOffset = 0;
-  if (config && !forceReset) {
+  if (config && !forceReset && !forceClean) {
     if (!config.isComplete) {
       startOffset = config.lastOffset;
       console.log(`[SYNC] Continuing from offset ${startOffset}/${config.totalRecords}`);
@@ -507,6 +601,7 @@ async function syncSingleEndpoint(
     finalOffset: offset, 
     isComplete,
     validation,
+    cleaned,
   };
 }
 
@@ -621,7 +716,8 @@ async function syncOrderDetails(
   endpointId: string,
   baseUrl: string,
   token: string,
-  startTime: number
+  startTime: number,
+  forceClean: boolean = false
 ): Promise<{ 
   processed: number; 
   created: number; 
@@ -631,8 +727,18 @@ async function syncOrderDetails(
   finalOffset: number; 
   isComplete: boolean;
   validation: null;
+  cleaned?: number;
 }> {
   console.log(`[ORDER-DETAILS] Starting sync`);
+
+  let cleaned = 0;
+
+  // Clean data if forced
+  if (forceClean) {
+    console.log(`[ORDER-DETAILS] Force clean requested`);
+    cleaned = await cleanTableData(supabase, 'eskolare_order_details', connectionId);
+    await resetExtractionProgress(supabase, connectionId, endpointId);
+  }
 
   const ordersToSync = await getOrdersNeedingDetails(supabase, connectionId, ORDER_DETAILS_BATCH_SIZE);
 
@@ -641,6 +747,7 @@ async function syncOrderDetails(
     return {
       processed: 0, created: 0, updated: 0, timedOut: false,
       totalRecords: 0, finalOffset: 0, isComplete: true, validation: null,
+      cleaned,
     };
   }
 
@@ -729,6 +836,7 @@ async function syncOrderDetails(
     finalOffset: processed,
     isComplete,
     validation: null,
+    cleaned,
   };
 }
 
@@ -747,7 +855,7 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     supabase = createClient(supabaseUrl, supabaseKey);
 
-    const { connectionId, endpoint, testOnly, forceReset = false } = await req.json() as SyncRequest;
+    const { connectionId, endpoint, testOnly, forceReset = false, forceClean = false } = await req.json() as SyncRequest;
 
     if (!connectionId) {
       throw new Error('connectionId is required');
@@ -793,22 +901,38 @@ serve(async (req) => {
       );
     }
 
-    // If no endpoint specified, get status of all endpoints
-    if (!endpoint) {
-      const statuses = await getEndpointsStatus(supabase, connectionId, connection.provider_id);
+    // =========================================================================
+    // SE NÃO TEM ENDPOINT ESPECIFICADO, SINCRONIZA O PRÓXIMO PENDENTE
+    // =========================================================================
+    let endpointToSync = endpoint;
+    
+    if (!endpointToSync) {
       const nextPending = await getNextPendingEndpoint(supabase, connectionId, connection.provider_id);
       
-      return new Response(
-        JSON.stringify({
-          success: true,
-          endpoints: statuses,
-          nextPending,
-          message: nextPending 
-            ? `Próximo endpoint a sincronizar: ${nextPending}` 
-            : 'Todos os endpoints estão sincronizados',
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      if (!nextPending) {
+        // Todos os endpoints estão sincronizados
+        const statuses = await getEndpointsStatus(supabase, connectionId, connection.provider_id);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: 'Todos os endpoints estão sincronizados',
+            total: { processed: 0, created: 0, updated: 0 },
+            endpoints: statuses.reduce((acc, s) => ({ 
+              ...acc, 
+              [s.slug]: { 
+                complete: s.isComplete, 
+                records: s.recordsInDb,
+                expected: s.totalRecords,
+              } 
+            }), {}),
+            duration_ms: Date.now() - startTime,
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      
+      console.log(`[MAIN] No endpoint specified, syncing next pending: ${nextPending}`);
+      endpointToSync = nextPending;
     }
 
     // Get specific endpoint
@@ -816,12 +940,12 @@ serve(async (req) => {
       .from('api_endpoints')
       .select('*')
       .eq('provider_id', connection.provider_id)
-      .eq('slug', endpoint)
+      .eq('slug', endpointToSync)
       .eq('is_active', true)
       .single();
 
     if (epError || !ep) {
-      throw new Error(`Endpoint not found: ${endpoint}`);
+      throw new Error(`Endpoint not found: ${endpointToSync}`);
     }
 
     console.log(`[MAIN] Syncing single endpoint: ${ep.slug} (${ep.path})`);
@@ -842,9 +966,9 @@ serve(async (req) => {
     // Sync the endpoint
     let result;
     if (ep.slug === 'order-details') {
-      result = await syncOrderDetails(supabase, connectionId, ep.id, baseUrl, token, startTime);
+      result = await syncOrderDetails(supabase, connectionId, ep.id, baseUrl, token, startTime, forceClean);
     } else {
-      result = await syncSingleEndpoint(supabase, connectionId, ep, baseUrl, token, startTime, forceReset);
+      result = await syncSingleEndpoint(supabase, connectionId, ep, baseUrl, token, startTime, forceReset, forceClean);
     }
 
     // Update log entry
@@ -863,10 +987,29 @@ serve(async (req) => {
       })
       .eq('id', logEntry.id);
 
+    // =========================================================================
+    // RESPOSTA PADRONIZADA COM ESTRUTURA ESPERADA PELA UI
+    // =========================================================================
     return new Response(
       JSON.stringify({
         success: true,
         endpoint: ep.slug,
+        total: {
+          processed: result.processed,
+          created: result.created,
+          updated: result.updated,
+        },
+        endpoints: {
+          [ep.slug]: {
+            processed: result.processed,
+            created: result.created,
+            updated: result.updated,
+            complete: result.isComplete,
+            totalRecords: result.totalRecords,
+            validation: result.validation,
+            cleaned: result.cleaned,
+          },
+        },
         ...result,
         duration_ms: Date.now() - startTime,
         message: result.isComplete 
@@ -892,7 +1035,12 @@ serve(async (req) => {
     }
     
     return new Response(
-      JSON.stringify({ success: false, error: error.message }),
+      JSON.stringify({ 
+        success: false, 
+        error: error.message,
+        total: { processed: 0, created: 0, updated: 0 },
+        endpoints: {},
+      }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
