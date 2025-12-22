@@ -8,8 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Plus, Plug, RefreshCw, Settings, CheckCircle, XCircle, Zap, Loader2, ChevronDown, RefreshCcw } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
+import { Plus, Plug, RefreshCw, Settings, CheckCircle, XCircle, Zap, Loader2, ChevronDown, RefreshCcw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConnectionSettingsModal } from '@/components/integrations/ConnectionSettingsModal';
 
@@ -116,9 +116,10 @@ export default function Integrations() {
     }
   };
 
-  const handleSyncAll = async (connectionId: string, connectionName: string) => {
+  const handleSyncAll = async (connectionId: string, connectionName: string, forceClean: boolean = false) => {
     setSyncingId(connectionId);
-    const toastId = toast.loading(`Iniciando sincronização completa de ${connectionName}...`);
+    const actionName = forceClean ? 'resync completo' : 'sincronização completa';
+    const toastId = toast.loading(`Iniciando ${actionName} de ${connectionName}...`);
     let totalProcessed = 0, totalCreated = 0, totalUpdated = 0;
     let completedEndpoints = 0;
     let hasError = false;
@@ -134,8 +135,9 @@ export default function Integrations() {
           break;
         }
         
-        // Check if all endpoints are synced
-        if (result.message === 'Todos os endpoints estão sincronizados' || 
+        // Check if all endpoints are synced (use allComplete flag for reliability)
+        if (result.allComplete || 
+            result.message === 'Todos os endpoints estão sincronizados' || 
             result.message?.includes('sincronizados')) {
           break;
         }
@@ -158,7 +160,7 @@ export default function Integrations() {
       
       if (!hasError) {
         toast.success(
-          `Sincronização completa!\n\n${completedEndpoints} endpoints processados\nTotal: ${totalProcessed} registros\nCriados: ${totalCreated} | Atualizados: ${totalUpdated}`,
+          `${forceClean ? 'Resync completo' : 'Sincronização completa'}!\n\n${completedEndpoints} endpoints processados\nTotal: ${totalProcessed} registros\nCriados: ${totalCreated} | Atualizados: ${totalUpdated}`,
           { id: toastId, duration: 10000 }
         );
       }
@@ -303,9 +305,17 @@ export default function Integrations() {
                             <RefreshCw className="mr-2 h-4 w-4" />
                             Próximo Pendente
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleSyncAll(conn.id, conn.name)}>
+                          <DropdownMenuItem onClick={() => handleSyncAll(conn.id, conn.name, false)}>
                             <RefreshCcw className="mr-2 h-4 w-4" />
                             Sincronizar Tudo
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem 
+                            onClick={() => handleSyncAll(conn.id, conn.name, true)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Forçar Resync Completo
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>

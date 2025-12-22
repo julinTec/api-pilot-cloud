@@ -248,26 +248,32 @@ async function getNextPendingEndpoint(
   supabase: any,
   connectionId: string,
   providerId: string
-): Promise<string | null> {
+): Promise<{ slug: string; reason: string; needsClean: boolean } | null> {
   const statuses = await getEndpointsStatus(supabase, connectionId, providerId);
   
   for (const status of statuses) {
-    // Check if endpoint needs sync
+    // 1. Check if marked as incomplete (in progress)
     if (!status.isComplete) {
       console.log(`[PRIORITY] Next pending: ${status.slug} (incomplete, offset: ${status.lastOffset}/${status.totalRecords})`);
-      return status.slug;
+      return { slug: status.slug, reason: 'incomplete', needsClean: false };
     }
     
-    // Check if sync is stale (older than 30 minutes for complete syncs)
-    if (status.lastSyncAt) {
-      const lastSync = new Date(status.lastSyncAt);
-      const ageMinutes = (Date.now() - lastSync.getTime()) / 60000;
-      
-      // If more than 30 minutes old and has records, might need re-sync
-      if (ageMinutes > 30 && status.totalRecords > 0 && status.recordsInDb < status.totalRecords) {
-        console.log(`[PRIORITY] ${status.slug} is stale or incomplete (db: ${status.recordsInDb}, api: ${status.totalRecords})`);
-        return status.slug;
-      }
+    // 2. Check for DUPLICATES (more records in DB than API reported)
+    if (status.totalRecords > 0 && status.recordsInDb > status.totalRecords) {
+      console.log(`[PRIORITY] ${status.slug} has DUPLICATES (db: ${status.recordsInDb}, api: ${status.totalRecords})`);
+      return { slug: status.slug, reason: 'duplicates', needsClean: true };
+    }
+    
+    // 3. Check for MISSING records (fewer in DB than API)
+    if (status.totalRecords > 0 && status.recordsInDb < status.totalRecords) {
+      console.log(`[PRIORITY] ${status.slug} is INCOMPLETE (db: ${status.recordsInDb}, api: ${status.totalRecords})`);
+      return { slug: status.slug, reason: 'missing_records', needsClean: false };
+    }
+    
+    // 4. Check for stale syncs (never synced or very old)
+    if (!status.lastSyncAt && status.totalRecords === 0) {
+      console.log(`[PRIORITY] ${status.slug} has never been synced`);
+      return { slug: status.slug, reason: 'never_synced', needsClean: false };
     }
   }
 
@@ -905,6 +911,7 @@ serve(async (req) => {
     // SE NÃO TEM ENDPOINT ESPECIFICADO, SINCRONIZA O PRÓXIMO PENDENTE
     // =========================================================================
     let endpointToSync = endpoint;
+    let autoForceClean = false;
     
     if (!endpointToSync) {
       const nextPending = await getNextPendingEndpoint(supabase, connectionId, connection.provider_id);
@@ -916,6 +923,7 @@ serve(async (req) => {
           JSON.stringify({
             success: true,
             message: 'Todos os endpoints estão sincronizados',
+            allComplete: true,
             total: { processed: 0, created: 0, updated: 0 },
             endpoints: statuses.reduce((acc, s) => ({ 
               ...acc, 
@@ -931,8 +939,14 @@ serve(async (req) => {
         );
       }
       
-      console.log(`[MAIN] No endpoint specified, syncing next pending: ${nextPending}`);
-      endpointToSync = nextPending;
+      console.log(`[MAIN] No endpoint specified, syncing next pending: ${nextPending.slug} (reason: ${nextPending.reason})`);
+      endpointToSync = nextPending.slug;
+      
+      // Auto-enable forceClean if duplicates detected
+      if (nextPending.needsClean) {
+        console.log(`[MAIN] Auto-enabling forceClean due to: ${nextPending.reason}`);
+        autoForceClean = true;
+      }
     }
 
     // Get specific endpoint
@@ -963,12 +977,13 @@ serve(async (req) => {
     
     logEntry = newLogEntry;
 
-    // Sync the endpoint
+    // Sync the endpoint (use autoForceClean if needed)
+    const shouldForceClean = forceClean || autoForceClean;
     let result;
     if (ep.slug === 'order-details') {
-      result = await syncOrderDetails(supabase, connectionId, ep.id, baseUrl, token, startTime, forceClean);
+      result = await syncOrderDetails(supabase, connectionId, ep.id, baseUrl, token, startTime, shouldForceClean);
     } else {
-      result = await syncSingleEndpoint(supabase, connectionId, ep, baseUrl, token, startTime, forceReset, forceClean);
+      result = await syncSingleEndpoint(supabase, connectionId, ep, baseUrl, token, startTime, forceReset, shouldForceClean);
     }
 
     // Update log entry
