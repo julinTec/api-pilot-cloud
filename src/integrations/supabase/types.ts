@@ -267,6 +267,42 @@ export type Database = {
           },
         ]
       }
+      eskolare_order_details: {
+        Row: {
+          connection_id: string
+          created_at: string
+          data: Json
+          details_synced_at: string | null
+          external_id: string
+          id: string
+          order_status: string | null
+          order_uid: string | null
+          updated_at: string
+        }
+        Insert: {
+          connection_id: string
+          created_at?: string
+          data?: Json
+          details_synced_at?: string | null
+          external_id: string
+          id?: string
+          order_status?: string | null
+          order_uid?: string | null
+          updated_at?: string
+        }
+        Update: {
+          connection_id?: string
+          created_at?: string
+          data?: Json
+          details_synced_at?: string | null
+          external_id?: string
+          id?: string
+          order_status?: string | null
+          order_uid?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       eskolare_orders: {
         Row: {
           connection_id: string
