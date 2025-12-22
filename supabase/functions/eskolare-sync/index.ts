@@ -19,12 +19,15 @@ interface EskolareConfig {
 }
 
 function getExternalId(record: any): string {
-  return record.id?.toString() || 
+  // Try multiple possible ID fields in order of preference
+  return record.uid?.toString() || 
+         record.id?.toString() || 
          record.uuid?.toString() || 
          record.order_id?.toString() || 
          record.code?.toString() ||
          record.slug?.toString() ||
-         JSON.stringify(record).substring(0, 50);
+         // Only use JSON fallback if no ID field found, and use a hash-like approach
+         `hash_${JSON.stringify(record).length}_${JSON.stringify(record).substring(0, 100)}`;
 }
 
 // Remove duplicate records from a batch based on external_id
