@@ -47,7 +47,7 @@ export function AppSidebar() {
           </div>
           {!collapsed && (
             <div className="flex flex-col">
-              <span className="font-semibold text-sidebar-foreground">API Hub</span>
+              <span className="font-semibold text-sidebar-foreground">API Data Hub</span>
               <span className="text-xs text-muted-foreground">Gerenciador de APIs</span>
             </div>
           )}
@@ -86,7 +86,7 @@ export function AppSidebar() {
       <SidebarFooter className="p-4">
         {!collapsed && (
           <div className="text-xs text-muted-foreground">
-            © 2024 API Hub
+            © 2024 API Data Hub
           </div>
         )}
       </SidebarFooter>
