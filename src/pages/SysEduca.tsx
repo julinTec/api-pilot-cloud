@@ -127,7 +127,7 @@ export default function SysEduca() {
           body: { 
             connectionId: selectedConnection, 
             ano: selectedYear,
-            forceClean: isFirstCall,
+            forceClean: isFirstCall && offset === 0,
             startOffset: offset,
           },
         });

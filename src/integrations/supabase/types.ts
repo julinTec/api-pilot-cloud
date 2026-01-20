@@ -716,6 +716,7 @@ export type Database = {
       syseduca_sync_cache: {
         Row: {
           cache_key: string
+          chunk_index: number
           connection_id: string
           created_at: string | null
           data: Json
@@ -724,6 +725,7 @@ export type Database = {
         }
         Insert: {
           cache_key: string
+          chunk_index?: number
           connection_id: string
           created_at?: string | null
           data: Json
@@ -732,6 +734,7 @@ export type Database = {
         }
         Update: {
           cache_key?: string
+          chunk_index?: number
           connection_id?: string
           created_at?: string | null
           data?: Json
