@@ -131,6 +131,7 @@ export type Database = {
           is_active: boolean
           logo_url: string | null
           name: string
+          requires_auth: boolean
           slug: string
           updated_at: string
         }
@@ -144,6 +145,7 @@ export type Database = {
           is_active?: boolean
           logo_url?: string | null
           name: string
+          requires_auth?: boolean
           slug: string
           updated_at?: string
         }
@@ -157,6 +159,7 @@ export type Database = {
           is_active?: boolean
           logo_url?: string | null
           name?: string
+          requires_auth?: boolean
           slug?: string
           updated_at?: string
         }

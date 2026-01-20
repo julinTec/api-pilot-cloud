@@ -14,7 +14,7 @@ interface Connection {
   name: string;
   environment: string;
   credentials: { token?: string };
-  api_providers?: { name: string };
+  api_providers?: { name: string; requires_auth?: boolean };
 }
 
 interface ConnectionSettingsModalProps {
@@ -28,6 +28,8 @@ export function ConnectionSettingsModal({ connection, open, onOpenChange }: Conn
   const [isUpdating, setIsUpdating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  
+  const requiresAuth = connection?.api_providers?.requires_auth !== false;
   
   const [form, setForm] = useState({
     name: connection?.name || '',
@@ -151,15 +153,21 @@ export function ConnectionSettingsModal({ connection, open, onOpenChange }: Conn
               />
             </div>
             
-            <div className="space-y-2">
-              <Label>Novo Bearer Token (deixe em branco para manter o atual)</Label>
-              <Input 
-                type="password" 
-                value={form.token} 
-                onChange={(e) => setForm({ ...form, token: e.target.value })} 
-                placeholder="••••••••••••••••"
-              />
-            </div>
+            {requiresAuth ? (
+              <div className="space-y-2">
+                <Label>Novo Bearer Token (deixe em branco para manter o atual)</Label>
+                <Input 
+                  type="password" 
+                  value={form.token} 
+                  onChange={(e) => setForm({ ...form, token: e.target.value })} 
+                  placeholder="••••••••••••••••"
+                />
+              </div>
+            ) : (
+              <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+                Este provider não requer autenticação.
+              </div>
+            )}
             
             <div className="space-y-2">
               <Label>Ambiente</Label>

@@ -21,7 +21,7 @@ interface ConnectionWithProvider {
   credentials: { token?: string };
   provider_id: string;
   last_test_success: boolean | null;
-  api_providers?: { name: string };
+  api_providers?: { name: string; requires_auth?: boolean };
 }
 
 export default function Integrations() {
@@ -37,16 +37,19 @@ export default function Integrations() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [settingsConnection, setSettingsConnection] = useState<ConnectionWithProvider | null>(null);
 
+  const selectedProvider = providers.find(p => p.id === form.provider_id);
+  const requiresAuth = selectedProvider?.requires_auth !== false;
+
   const handleCreate = async () => {
-    if (!form.name || !form.provider_id || !form.token) {
-      toast.error('Preencha todos os campos');
+    if (!form.name || !form.provider_id || (requiresAuth && !form.token)) {
+      toast.error('Preencha todos os campos obrigatórios');
       return;
     }
     try {
       await createConnection.mutateAsync({
         name: form.name,
         provider_id: form.provider_id,
-        credentials: { token: form.token },
+        credentials: requiresAuth ? { token: form.token } : {},
         environment: form.environment,
       });
       toast.success('Conexão criada com sucesso!');
@@ -198,10 +201,19 @@ export default function Integrations() {
                 <Label>Nome da Conexão</Label>
                 <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ex: Produção Principal" />
               </div>
-              <div className="space-y-2">
-                <Label>Bearer Token</Label>
-                <Input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder="Seu token de API" />
-              </div>
+              {requiresAuth ? (
+                <div className="space-y-2">
+                  <Label>Bearer Token</Label>
+                  <Input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder="Seu token de API" />
+                </div>
+              ) : (
+                <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+                  <span className="flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4 text-success" />
+                    Este provider não requer autenticação
+                  </span>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>Ambiente</Label>
                 <Select value={form.environment} onValueChange={(v) => setForm({ ...form, environment: v })}>
