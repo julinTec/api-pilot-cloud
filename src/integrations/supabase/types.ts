@@ -713,6 +713,33 @@ export type Database = {
         }
         Relationships: []
       }
+      syseduca_sync_cache: {
+        Row: {
+          cache_key: string
+          connection_id: string
+          created_at: string | null
+          data: Json
+          id: string
+          total_records: number
+        }
+        Insert: {
+          cache_key: string
+          connection_id: string
+          created_at?: string | null
+          data: Json
+          id?: string
+          total_records?: number
+        }
+        Update: {
+          cache_key?: string
+          connection_id?: string
+          created_at?: string | null
+          data?: Json
+          id?: string
+          total_records?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
