@@ -7,7 +7,7 @@ const corsHeaders = {
 };
 
 const BATCH_SIZE = 500;
-const MAX_EXECUTION_TIME = 45000; // 45 seconds
+const MAX_EXECUTION_TIME = 40000; // 40 seconds (margin for safety)
 
 interface SyncRequest {
   connectionId: string;
@@ -20,7 +20,6 @@ interface SyncRequest {
 function parseNumber(value: string | number): number {
   if (typeof value === 'number') return value;
   if (!value) return 0;
-  // Replace comma with period for decimal
   const normalized = value.toString().replace(',', '.');
   return parseFloat(normalized) || 0;
 }
@@ -47,12 +46,12 @@ function removeDuplicatesFromBatch(records: any[]): any[] {
 async function processBatch(
   supabase: any,
   connectionId: string,
-  records: any[]
+  records: any[],
+  currentYear: number
 ): Promise<{ created: number; updated: number }> {
   const uniqueRecords = removeDuplicatesFromBatch(records);
   
   const rows = uniqueRecords.map(record => {
-    // Normalize numeric fields
     const normalizedData = {
       ...record,
       bruto: parseNumber(record.bruto),
@@ -66,13 +65,13 @@ async function processBatch(
       connection_id: connectionId,
       escola: record.escola || 'Não informado',
       matricula: record.matricula || '',
-      ano: parseInt(record.ano) || new Date().getFullYear(),
+      ano: parseInt(record.ano) || currentYear,
       data: normalizedData,
       external_id: getExternalId(record),
     };
   });
 
-  const { error, count } = await supabase
+  const { error } = await supabase
     .from('syseduca_dados')
     .upsert(rows, { 
       onConflict: 'connection_id,external_id',
@@ -87,22 +86,17 @@ async function processBatch(
   return { created: rows.length, updated: 0 };
 }
 
-// Clean table data for a connection
+// Clean table data for a connection and year
 async function cleanTableData(
   supabase: any,
   connectionId: string,
-  ano?: number
+  ano: number
 ): Promise<number> {
-  let query = supabase
+  const { error, count } = await supabase
     .from('syseduca_dados')
     .delete()
-    .eq('connection_id', connectionId);
-
-  if (ano) {
-    query = query.eq('ano', ano);
-  }
-
-  const { error, count } = await query;
+    .eq('connection_id', connectionId)
+    .eq('ano', ano);
   
   if (error) {
     console.error('Clean error:', error);
@@ -112,8 +106,59 @@ async function cleanTableData(
   return count || 0;
 }
 
+// Get or create cache entry
+async function getCache(supabase: any, connectionId: string, cacheKey: string) {
+  const { data, error } = await supabase
+    .from('syseduca_sync_cache')
+    .select('data, total_records')
+    .eq('connection_id', connectionId)
+    .eq('cache_key', cacheKey)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    console.error('Cache fetch error:', error);
+  }
+
+  return data;
+}
+
+// Save data to cache
+async function saveCache(
+  supabase: any, 
+  connectionId: string, 
+  cacheKey: string, 
+  data: any[],
+  totalRecords: number
+) {
+  const { error } = await supabase
+    .from('syseduca_sync_cache')
+    .upsert({
+      connection_id: connectionId,
+      cache_key: cacheKey,
+      data: data,
+      total_records: totalRecords,
+    }, { onConflict: 'connection_id,cache_key' });
+
+  if (error) {
+    console.error('Cache save error:', error);
+    throw error;
+  }
+}
+
+// Clear cache after successful sync
+async function clearCache(supabase: any, connectionId: string, cacheKey: string) {
+  const { error } = await supabase
+    .from('syseduca_sync_cache')
+    .delete()
+    .eq('connection_id', connectionId)
+    .eq('cache_key', cacheKey);
+
+  if (error) {
+    console.error('Cache clear error:', error);
+  }
+}
+
 serve(async (req) => {
-  // Handle CORS
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -157,45 +202,92 @@ serve(async (req) => {
       .eq('slug', 'dados')
       .single();
 
-    // Create extraction log
-    const { data: logEntry, error: logError } = await supabase
-      .from('extraction_logs')
-      .insert({
-        connection_id: connectionId,
-        endpoint_id: endpoint?.id,
-        status: 'running',
-        started_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (logError) {
-      console.error('Error creating log:', logError);
-    }
-
     const currentYear = ano || new Date().getFullYear();
-    const baseUrl = connection.api_providers.base_url;
-    const apiPath = endpoint?.path || '/dados02.asp';
-    const apiUrl = `${baseUrl}${apiPath}?ano=${currentYear}`;
+    const cacheKey = `year_${currentYear}`;
 
-    console.log(`Fetching SysEduca data from: ${apiUrl}`);
+    // Create extraction log only on first call
+    let logEntry = null;
+    if (startOffset === 0) {
+      const { data: log } = await supabase
+        .from('extraction_logs')
+        .insert({
+          connection_id: connectionId,
+          endpoint_id: endpoint?.id,
+          status: 'running',
+          started_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+      logEntry = log;
+    }
 
-    // Fetch data from API
-    const response = await fetch(apiUrl);
+    // Check for cached data
+    const cached = await getCache(supabase, connectionId, cacheKey);
     
-    if (!response.ok) {
-      throw new Error(`API returned ${response.status}: ${response.statusText}`);
+    let apiData: any[];
+    let totalRecords: number;
+    let dataSource: 'api' | 'cache';
+
+    if (cached && startOffset > 0) {
+      // PHASE 2: Use cached data (fast!)
+      console.log(`Using cached data: ${cached.total_records} records`);
+      apiData = cached.data as any[];
+      totalRecords = cached.total_records;
+      dataSource = 'cache';
+    } else {
+      // PHASE 1: Fetch from API and save to cache
+      const baseUrl = connection.api_providers.base_url;
+      const apiPath = endpoint?.path || '/dados02.asp';
+      const apiUrl = `${baseUrl}${apiPath}?ano=${currentYear}`;
+
+      console.log(`Fetching SysEduca data from: ${apiUrl}`);
+
+      const response = await fetch(apiUrl);
+      
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (!Array.isArray(data)) {
+        throw new Error('API response is not an array');
+      }
+
+      apiData = data;
+      totalRecords = data.length;
+      dataSource = 'api';
+
+      console.log(`Received ${totalRecords} records from SysEduca API`);
+
+      // Save to cache immediately
+      console.log(`Caching ${totalRecords} records...`);
+      await saveCache(supabase, connectionId, cacheKey, apiData, totalRecords);
+      console.log('Data cached successfully');
+
+      // Check if we're already out of time after fetching
+      const elapsedAfterFetch = Date.now() - startTime;
+      console.log(`Elapsed time after fetch: ${elapsedAfterFetch}ms`);
+      
+      if (elapsedAfterFetch > MAX_EXECUTION_TIME) {
+        console.log('Timeout after fetching and caching, returning to continue processing');
+        return new Response(
+          JSON.stringify({
+            success: true,
+            completed: false,
+            nextOffset: 0,
+            ano: currentYear,
+            totalRecords: totalRecords,
+            processed: 0,
+            message: 'Data cached, processing will continue',
+            durationMs: elapsedAfterFetch,
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
-    const data = await response.json();
-
-    if (!Array.isArray(data)) {
-      throw new Error('API response is not an array');
-    }
-
-    console.log(`Received ${data.length} records from SysEduca API`);
-
-    // Clean existing data only on first call (startOffset === 0)
+    // Clean existing data only on first real processing call
     if (forceClean && startOffset === 0) {
       const deleted = await cleanTableData(supabase, connectionId, currentYear);
       console.log(`Cleaned ${deleted} existing records for year ${currentYear}`);
@@ -206,20 +298,21 @@ serve(async (req) => {
     let totalCreated = 0;
     let totalUpdated = 0;
 
-    for (let i = startOffset; i < data.length; i += BATCH_SIZE) {
+    console.log(`Starting processing from offset ${startOffset}, total records: ${totalRecords}`);
+
+    for (let i = startOffset; i < apiData.length; i += BATCH_SIZE) {
       // Check execution time
       if (Date.now() - startTime > MAX_EXECUTION_TIME) {
-        console.log(`Timeout approaching, processed ${totalProcessed} of ${data.length} records from offset ${startOffset}`);
+        console.log(`Timeout approaching at offset ${i}, processed ${totalProcessed} records this call`);
         
-        // Return partial result with next offset
         return new Response(
           JSON.stringify({
             success: true,
             completed: false,
             nextOffset: i,
             ano: currentYear,
-            totalRecords: data.length,
-            processed: totalProcessed,
+            totalRecords: totalRecords,
+            processed: i,
             created: totalCreated,
             updated: totalUpdated,
             durationMs: Date.now() - startTime,
@@ -228,25 +321,29 @@ serve(async (req) => {
         );
       }
 
-      const batch = data.slice(i, i + BATCH_SIZE);
-      const { created, updated } = await processBatch(supabase, connectionId, batch);
+      const batch = apiData.slice(i, i + BATCH_SIZE);
+      const { created, updated } = await processBatch(supabase, connectionId, batch, currentYear);
       
       totalProcessed += batch.length;
       totalCreated += created;
       totalUpdated += updated;
 
-      console.log(`Processed batch ${Math.floor(i / BATCH_SIZE) + 1}: ${i + batch.length}/${data.length}`);
+      console.log(`Processed batch: ${i + batch.length}/${totalRecords} (${Math.round((i + batch.length) / totalRecords * 100)}%)`);
     }
 
     const duration = Date.now() - startTime;
 
-    // Update extraction log
+    // Clear cache after successful completion
+    console.log('Sync complete, clearing cache...');
+    await clearCache(supabase, connectionId, cacheKey);
+
+    // Update extraction log if we have one
     if (logEntry) {
       await supabase
         .from('extraction_logs')
         .update({
-          status: totalProcessed >= data.length ? 'success' : 'partial',
-          records_processed: totalProcessed,
+          status: 'success',
+          records_processed: totalRecords,
           records_created: totalCreated,
           records_updated: totalUpdated,
           duration_ms: duration,
@@ -269,13 +366,15 @@ serve(async (req) => {
       }
     }
 
+    console.log(`Sync completed: ${totalRecords} records, ${Object.keys(schoolCounts).length} schools`);
+
     return new Response(
       JSON.stringify({
         success: true,
         completed: true,
         ano: currentYear,
-        totalRecords: data.length,
-        processed: startOffset + totalProcessed,
+        totalRecords: totalRecords,
+        processed: totalRecords,
         created: totalCreated,
         updated: totalUpdated,
         durationMs: duration,

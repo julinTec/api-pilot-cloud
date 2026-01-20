@@ -145,7 +145,10 @@ export default function SysEduca() {
         setSyncProgress({ processed: totalProcessed, total: totalRecords });
 
         if (!completed) {
-          toast.info(`Sincronizando... ${totalProcessed.toLocaleString()}/${totalRecords.toLocaleString()} registros`);
+          const message = data.message 
+            ? data.message 
+            : `${totalProcessed.toLocaleString()}/${totalRecords.toLocaleString()} registros`;
+          toast.info(`Sincronizando... ${message}`);
         }
       }
 
