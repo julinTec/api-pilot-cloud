@@ -9,6 +9,7 @@ import Integrations from "./pages/Integrations";
 import Logs from "./pages/Logs";
 import Endpoints from "./pages/Endpoints";
 import Data from "./pages/Data";
+import SysEduca from "./pages/SysEduca";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,6 +27,7 @@ const App = () => (
             <Route path="/logs" element={<Logs />} />
             <Route path="/endpoints" element={<Endpoints />} />
             <Route path="/data" element={<Data />} />
+            <Route path="/syseduca" element={<SysEduca />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AppLayout>

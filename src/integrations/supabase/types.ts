@@ -674,6 +674,42 @@ export type Database = {
           },
         ]
       }
+      syseduca_dados: {
+        Row: {
+          ano: number
+          connection_id: string
+          created_at: string
+          data: Json
+          escola: string
+          external_id: string
+          id: string
+          matricula: string
+          updated_at: string
+        }
+        Insert: {
+          ano: number
+          connection_id: string
+          created_at?: string
+          data?: Json
+          escola: string
+          external_id: string
+          id?: string
+          matricula: string
+          updated_at?: string
+        }
+        Update: {
+          ano?: number
+          connection_id?: string
+          created_at?: string
+          data?: Json
+          escola?: string
+          external_id?: string
+          id?: string
+          matricula?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

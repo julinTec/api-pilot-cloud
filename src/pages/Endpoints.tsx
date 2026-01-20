@@ -8,11 +8,15 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
-const endpoints = [
+const eskEndpoints = [
   { provider: 'eskolare', endpoint: 'orders', name: 'Pedidos', description: 'Todos os pedidos sincronizados' },
   { provider: 'eskolare', endpoint: 'payments', name: 'Pagamentos', description: 'Todos os pagamentos' },
   { provider: 'eskolare', endpoint: 'grades', name: 'Séries', description: 'Séries/Anos escolares' },
   { provider: 'eskolare', endpoint: 'order-details', name: 'Detalhes do Pedido', description: 'Detalhes completos de cada pedido' },
+];
+
+const sysEducaEndpoints = [
+  { provider: 'syseduca', endpoint: 'dados', name: 'Dados Financeiros', description: 'Matrículas, parcelas e pagamentos por escola' },
 ];
 
 export default function Endpoints() {
@@ -79,10 +83,10 @@ export default function Endpoints() {
         </AccordionItem>
       </Accordion>
       
-      {/* Lista de Endpoints */}
+      {/* Eskolare Endpoints */}
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Endpoints Disponíveis</h3>
-        {endpoints.map((ep) => {
+        <h3 className="text-lg font-semibold">Eskolare</h3>
+        {eskEndpoints.map((ep) => {
           const baseUrl = `${SUPABASE_URL}/functions/v1/api-data?provider=${ep.provider}&endpoint=${ep.endpoint}`;
           const fullUrl = `${baseUrl}&all=true`;
           return (
@@ -116,6 +120,54 @@ export default function Endpoints() {
                   <div className="flex items-center gap-2">
                     <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{baseUrl}</code>
                     <Button variant="ghost" size="icon" onClick={() => copyUrl(baseUrl)} title="Copiar URL">
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* SysEduca Endpoints */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold">SysEduca</h3>
+        {sysEducaEndpoints.map((ep) => {
+          const baseUrl = `${SUPABASE_URL}/functions/v1/api-data?provider=${ep.provider}&endpoint=${ep.endpoint}`;
+          const fullUrl = `${baseUrl}&all=true`;
+          const escolaUrl = `${baseUrl}&escola=Nome%20da%20Escola&all=true`;
+          return (
+            <Card key={`${ep.provider}-${ep.endpoint}`}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center justify-between">
+                  {ep.name}
+                  <span className="text-xs font-normal text-muted-foreground bg-muted px-2 py-1 rounded">
+                    {ep.provider}/{ep.endpoint}
+                  </span>
+                </CardTitle>
+                <p className="text-sm text-muted-foreground">{ep.description}</p>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">URL completa (todos os registros):</p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{fullUrl}</code>
+                    <Button variant="outline" size="icon" onClick={() => copyUrl(fullUrl)} title="Copiar URL">
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                    <Button variant="outline" size="icon" asChild title="Abrir no navegador">
+                      <a href={fullUrl} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Filtrar por escola:</p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{escolaUrl}</code>
+                    <Button variant="ghost" size="icon" onClick={() => copyUrl(escolaUrl)} title="Copiar URL">
                       <Copy className="h-4 w-4" />
                     </Button>
                   </div>
