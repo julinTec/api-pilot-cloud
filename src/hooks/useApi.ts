@@ -82,8 +82,11 @@ export function useExtractionLogs(connectionId?: string, limit = 50) {
 export function useSyncConnection() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ connectionId, endpoint }: { connectionId: string; endpoint?: string }) => {
-      const { data, error } = await supabase.functions.invoke('eskolare-sync', {
+    mutationFn: async ({ connectionId, endpoint, providerSlug }: { connectionId: string; endpoint?: string; providerSlug?: string }) => {
+      // Determine which edge function to call based on provider
+      const functionName = providerSlug === 'syseduca' ? 'syseduca-sync' : 'eskolare-sync';
+      
+      const { data, error } = await supabase.functions.invoke(functionName, {
         body: { connectionId, endpoint },
       });
       if (error) throw error;
@@ -100,8 +103,11 @@ export function useSyncConnection() {
 export function useTestConnection() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (connectionId: string) => {
-      const { data, error } = await supabase.functions.invoke('eskolare-sync', {
+    mutationFn: async ({ connectionId, providerSlug }: { connectionId: string; providerSlug?: string }) => {
+      // Determine which edge function to call based on provider
+      const functionName = providerSlug === 'syseduca' ? 'syseduca-sync' : 'eskolare-sync';
+      
+      const { data, error } = await supabase.functions.invoke(functionName, {
         body: { connectionId, testOnly: true },
       });
       if (error) throw error;
