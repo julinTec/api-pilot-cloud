@@ -7,6 +7,7 @@ const corsHeaders = {
 };
 
 const BATCH_SIZE = 500;
+const CACHE_CHUNK_SIZE = 5000; // Smaller chunks to avoid statement timeout
 const MAX_EXECUTION_TIME = 40000; // 40 seconds (margin for safety)
 
 interface SyncRequest {
@@ -106,23 +107,54 @@ async function cleanTableData(
   return count || 0;
 }
 
-// Get or create cache entry
+// Check if cache exists for this connection/year
+async function cacheExists(supabase: any, connectionId: string, cacheKey: string): Promise<boolean> {
+  const { count, error } = await supabase
+    .from('syseduca_sync_cache')
+    .select('*', { count: 'exact', head: true })
+    .eq('connection_id', connectionId)
+    .eq('cache_key', cacheKey);
+
+  if (error) {
+    console.error('Cache check error:', error);
+    return false;
+  }
+
+  return (count || 0) > 0;
+}
+
+// Get cached data by loading all chunks and merging
 async function getCache(supabase: any, connectionId: string, cacheKey: string) {
   const { data, error } = await supabase
     .from('syseduca_sync_cache')
-    .select('data, total_records')
+    .select('data, total_records, chunk_index')
     .eq('connection_id', connectionId)
     .eq('cache_key', cacheKey)
-    .single();
+    .order('chunk_index', { ascending: true });
 
-  if (error && error.code !== 'PGRST116') {
+  if (error) {
     console.error('Cache fetch error:', error);
+    return null;
   }
 
-  return data;
+  if (!data || data.length === 0) {
+    return null;
+  }
+
+  // Merge all chunks
+  const allRecords: any[] = [];
+  let totalRecords = 0;
+  for (const chunk of data) {
+    if (Array.isArray(chunk.data)) {
+      allRecords.push(...chunk.data);
+    }
+    totalRecords = chunk.total_records; // Same for all chunks
+  }
+
+  return { data: allRecords, total_records: totalRecords };
 }
 
-// Save data to cache
+// Save data to cache in chunks to avoid statement timeout
 async function saveCache(
   supabase: any, 
   connectionId: string, 
@@ -130,19 +162,37 @@ async function saveCache(
   data: any[],
   totalRecords: number
 ) {
-  const { error } = await supabase
+  // First clear any existing cache for this key
+  await supabase
     .from('syseduca_sync_cache')
-    .upsert({
-      connection_id: connectionId,
-      cache_key: cacheKey,
-      data: data,
-      total_records: totalRecords,
-    }, { onConflict: 'connection_id,cache_key' });
+    .delete()
+    .eq('connection_id', connectionId)
+    .eq('cache_key', cacheKey);
 
-  if (error) {
-    console.error('Cache save error:', error);
-    throw error;
+  // Save in chunks
+  for (let i = 0; i < data.length; i += CACHE_CHUNK_SIZE) {
+    const chunk = data.slice(i, i + CACHE_CHUNK_SIZE);
+    const chunkIndex = Math.floor(i / CACHE_CHUNK_SIZE);
+    
+    console.log(`Saving cache chunk ${chunkIndex}: ${chunk.length} records`);
+    
+    const { error } = await supabase
+      .from('syseduca_sync_cache')
+      .insert({
+        connection_id: connectionId,
+        cache_key: cacheKey,
+        data: chunk,
+        total_records: totalRecords,
+        chunk_index: chunkIndex,
+      });
+
+    if (error) {
+      console.error(`Cache save error (chunk ${chunkIndex}):`, error);
+      throw error;
+    }
   }
+  
+  console.log(`Cache saved: ${Math.ceil(data.length / CACHE_CHUNK_SIZE)} chunks`);
 }
 
 // Clear cache after successful sync
@@ -205,35 +255,25 @@ serve(async (req) => {
     const currentYear = ano || new Date().getFullYear();
     const cacheKey = `year_${currentYear}`;
 
-    // Create extraction log only on first call
-    let logEntry = null;
-    if (startOffset === 0) {
-      const { data: log } = await supabase
-        .from('extraction_logs')
-        .insert({
-          connection_id: connectionId,
-          endpoint_id: endpoint?.id,
-          status: 'running',
-          started_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-      logEntry = log;
-    }
+    // Check if cache already exists
+    const hasCachedData = await cacheExists(supabase, connectionId, cacheKey);
+    console.log(`Cache exists: ${hasCachedData}, startOffset: ${startOffset}, forceClean: ${forceClean}`);
 
-    // Check for cached data
-    const cached = await getCache(supabase, connectionId, cacheKey);
-    
     let apiData: any[];
     let totalRecords: number;
-    let dataSource: 'api' | 'cache';
 
-    if (cached && startOffset > 0) {
+    if (hasCachedData) {
       // PHASE 2: Use cached data (fast!)
-      console.log(`Using cached data: ${cached.total_records} records`);
-      apiData = cached.data as any[];
+      console.log('Reading from cache...');
+      const cached = await getCache(supabase, connectionId, cacheKey);
+      
+      if (!cached) {
+        throw new Error('Cache exists but could not be read');
+      }
+      
+      console.log(`Loaded ${cached.data.length} records from cache`);
+      apiData = cached.data;
       totalRecords = cached.total_records;
-      dataSource = 'cache';
     } else {
       // PHASE 1: Fetch from API and save to cache
       const baseUrl = connection.api_providers.base_url;
@@ -256,18 +296,17 @@ serve(async (req) => {
 
       apiData = data;
       totalRecords = data.length;
-      dataSource = 'api';
 
       console.log(`Received ${totalRecords} records from SysEduca API`);
 
-      // Save to cache immediately
-      console.log(`Caching ${totalRecords} records...`);
+      // Save to cache in chunks
+      console.log(`Caching ${totalRecords} records in chunks...`);
       await saveCache(supabase, connectionId, cacheKey, apiData, totalRecords);
       console.log('Data cached successfully');
 
-      // Check if we're already out of time after fetching
+      // Check if we're already out of time after fetching and caching
       const elapsedAfterFetch = Date.now() - startTime;
-      console.log(`Elapsed time after fetch: ${elapsedAfterFetch}ms`);
+      console.log(`Elapsed time after fetch+cache: ${elapsedAfterFetch}ms`);
       
       if (elapsedAfterFetch > MAX_EXECUTION_TIME) {
         console.log('Timeout after fetching and caching, returning to continue processing');
@@ -279,7 +318,7 @@ serve(async (req) => {
             ano: currentYear,
             totalRecords: totalRecords,
             processed: 0,
-            message: 'Data cached, processing will continue',
+            message: 'Dados em cache, processando...',
             durationMs: elapsedAfterFetch,
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -287,8 +326,22 @@ serve(async (req) => {
       }
     }
 
-    // Clean existing data only on first real processing call
+    // Create extraction log only on first processing call (when cleaning)
+    let logEntry = null;
     if (forceClean && startOffset === 0) {
+      const { data: log } = await supabase
+        .from('extraction_logs')
+        .insert({
+          connection_id: connectionId,
+          endpoint_id: endpoint?.id,
+          status: 'running',
+          started_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+      logEntry = log;
+
+      // Clean existing data
       const deleted = await cleanTableData(supabase, connectionId, currentYear);
       console.log(`Cleaned ${deleted} existing records for year ${currentYear}`);
     }
