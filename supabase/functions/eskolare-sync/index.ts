@@ -154,18 +154,21 @@ async function cleanTableData(
   return beforeCount || 0;
 }
 
-async function testConnection(baseUrl: string, token: string): Promise<{ success: boolean; data?: any; error?: string }> {
+async function testConnection(baseUrl: string, token: string | null, requiresAuth: boolean): Promise<{ success: boolean; data?: any; error?: string }> {
   try {
     const url = `${baseUrl}/orders/?limit=1`;
-    console.log(`[TEST] Testing connection to: ${url}`);
+    console.log(`[TEST] Testing connection to: ${url} (requiresAuth: ${requiresAuth})`);
     
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-    });
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    
+    if (requiresAuth && token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    const response = await fetch(url, { headers });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -882,7 +885,9 @@ serve(async (req) => {
     }
 
     const token = connection.credentials?.token;
-    if (!token) {
+    const requiresAuth = connection.api_providers?.requires_auth !== false;
+    
+    if (requiresAuth && !token) {
       throw new Error('No token in credentials');
     }
 
@@ -894,7 +899,7 @@ serve(async (req) => {
 
     // Test-only mode
     if (testOnly) {
-      const testResult = await testConnection(baseUrl, token);
+      const testResult = await testConnection(baseUrl, token, requiresAuth);
       
       await supabase
         .from('api_connections')
