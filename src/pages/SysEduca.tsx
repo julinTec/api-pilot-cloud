@@ -20,6 +20,7 @@ export default function SysEduca() {
   const [selectedConnection, setSelectedConnection] = useState<string>('');
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
   const [selectedSchool, setSelectedSchool] = useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = useState<{ processed: number; total: number } | null>(null);
 
   // Fetch SysEduca connections
   const { data: connections = [] } = useQuery({
@@ -109,25 +110,54 @@ export default function SysEduca() {
     return allData.filter(row => row.escola === selectedSchool);
   }, [allData, selectedSchool]);
 
-  // Sync mutation
+  // Sync mutation with loop until complete
   const syncMutation = useMutation({
     mutationFn: async () => {
-      const response = await supabase.functions.invoke('syseduca-sync', {
-        body: { 
-          connectionId: selectedConnection, 
-          ano: selectedYear,
-          forceClean: true 
-        },
-      });
+      let offset = 0;
+      let completed = false;
+      let totalProcessed = 0;
+      let totalRecords = 0;
+      let schools = 0;
+      let isFirstCall = true;
 
-      if (response.error) throw response.error;
-      return response.data;
+      setSyncProgress({ processed: 0, total: 0 });
+
+      while (!completed) {
+        const response = await supabase.functions.invoke('syseduca-sync', {
+          body: { 
+            connectionId: selectedConnection, 
+            ano: selectedYear,
+            forceClean: isFirstCall,
+            startOffset: offset,
+          },
+        });
+
+        if (response.error) throw response.error;
+        
+        const data = response.data;
+        completed = data.completed;
+        offset = data.nextOffset || 0;
+        totalProcessed = data.processed;
+        totalRecords = data.totalRecords;
+        schools = data.schools || 0;
+        isFirstCall = false;
+
+        setSyncProgress({ processed: totalProcessed, total: totalRecords });
+
+        if (!completed) {
+          toast.info(`Sincronizando... ${totalProcessed.toLocaleString()}/${totalRecords.toLocaleString()} registros`);
+        }
+      }
+
+      setSyncProgress(null);
+      return { processed: totalProcessed, totalRecords, schools };
     },
     onSuccess: (data) => {
-      toast.success(`Sincronizado! ${data.processed} registros de ${data.schools} escolas.`);
+      toast.success(`Sincronizado! ${data.processed.toLocaleString()} registros de ${data.schools} escolas.`);
       queryClient.invalidateQueries({ queryKey: ['syseduca-data'] });
     },
     onError: (error: any) => {
+      setSyncProgress(null);
       toast.error('Erro na sincronização: ' + error.message);
     },
   });
@@ -173,9 +203,13 @@ export default function SysEduca() {
           <Button 
             onClick={() => syncMutation.mutate()} 
             disabled={!selectedConnection || syncMutation.isPending}
+            className="min-w-[140px]"
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
-            Sincronizar
+            {syncMutation.isPending && syncProgress 
+              ? `${Math.round((syncProgress.processed / syncProgress.total) * 100)}%`
+              : 'Sincronizar'
+            }
           </Button>
         </div>
       </PageHeader>

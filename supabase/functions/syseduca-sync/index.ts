@@ -13,6 +13,7 @@ interface SyncRequest {
   connectionId: string;
   ano?: number;
   forceClean?: boolean;
+  startOffset?: number;
 }
 
 // Convert Brazilian number format (comma as decimal) to standard format
@@ -125,7 +126,7 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     const body: SyncRequest = await req.json();
-    const { connectionId, ano, forceClean } = body;
+    const { connectionId, ano, forceClean, startOffset = 0 } = body;
 
     if (!connectionId) {
       return new Response(
@@ -194,22 +195,37 @@ serve(async (req) => {
 
     console.log(`Received ${data.length} records from SysEduca API`);
 
-    // Clean existing data if requested
-    if (forceClean) {
+    // Clean existing data only on first call (startOffset === 0)
+    if (forceClean && startOffset === 0) {
       const deleted = await cleanTableData(supabase, connectionId, currentYear);
       console.log(`Cleaned ${deleted} existing records for year ${currentYear}`);
     }
 
-    // Process in batches
+    // Process in batches starting from offset
     let totalProcessed = 0;
     let totalCreated = 0;
     let totalUpdated = 0;
 
-    for (let i = 0; i < data.length; i += BATCH_SIZE) {
+    for (let i = startOffset; i < data.length; i += BATCH_SIZE) {
       // Check execution time
       if (Date.now() - startTime > MAX_EXECUTION_TIME) {
-        console.log(`Timeout approaching, processed ${totalProcessed} of ${data.length} records`);
-        break;
+        console.log(`Timeout approaching, processed ${totalProcessed} of ${data.length} records from offset ${startOffset}`);
+        
+        // Return partial result with next offset
+        return new Response(
+          JSON.stringify({
+            success: true,
+            completed: false,
+            nextOffset: i,
+            ano: currentYear,
+            totalRecords: data.length,
+            processed: totalProcessed,
+            created: totalCreated,
+            updated: totalUpdated,
+            durationMs: Date.now() - startTime,
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
 
       const batch = data.slice(i, i + BATCH_SIZE);
@@ -219,7 +235,7 @@ serve(async (req) => {
       totalCreated += created;
       totalUpdated += updated;
 
-      console.log(`Processed batch ${Math.floor(i / BATCH_SIZE) + 1}: ${totalProcessed}/${data.length}`);
+      console.log(`Processed batch ${Math.floor(i / BATCH_SIZE) + 1}: ${i + batch.length}/${data.length}`);
     }
 
     const duration = Date.now() - startTime;
@@ -256,9 +272,10 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
+        completed: true,
         ano: currentYear,
         totalRecords: data.length,
-        processed: totalProcessed,
+        processed: startOffset + totalProcessed,
         created: totalCreated,
         updated: totalUpdated,
         durationMs: duration,
