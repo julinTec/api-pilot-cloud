@@ -8,6 +8,7 @@ export interface ApiProvider {
   description: string | null;
   auth_type: 'bearer_token' | 'api_key' | 'basic_auth' | 'oauth2';
   is_active: boolean;
+  requires_auth: boolean;
   created_at: string;
   updated_at: string;
 }
