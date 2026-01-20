@@ -21,7 +21,7 @@ interface ConnectionWithProvider {
   credentials: { token?: string };
   provider_id: string;
   last_test_success: boolean | null;
-  api_providers?: { name: string; requires_auth?: boolean };
+  api_providers?: { name: string; slug?: string; requires_auth?: boolean };
 }
 
 export default function Integrations() {
@@ -60,10 +60,10 @@ export default function Integrations() {
     }
   };
 
-  const handleTest = async (connectionId: string) => {
+  const handleTest = async (connectionId: string, providerSlug?: string) => {
     setTestingId(connectionId);
     try {
-      const result = await testMutation.mutateAsync(connectionId);
+      const result = await testMutation.mutateAsync({ connectionId, providerSlug });
       if (result.success) {
         toast.success('Conexão válida! Token funcionando corretamente.');
       } else {
@@ -76,12 +76,12 @@ export default function Integrations() {
     }
   };
 
-  const handleSync = async (connectionId: string, connectionName: string) => {
+  const handleSync = async (connectionId: string, connectionName: string, providerSlug?: string) => {
     setSyncingId(connectionId);
     const toastId = toast.loading(`Sincronizando ${connectionName}...`);
     
     try {
-      const result = await syncMutation.mutateAsync({ connectionId });
+      const result = await syncMutation.mutateAsync({ connectionId, providerSlug });
       
       if (result.success) {
         const total = result.total || { processed: 0, created: 0, updated: 0 };
@@ -119,7 +119,7 @@ export default function Integrations() {
     }
   };
 
-  const handleSyncAll = async (connectionId: string, connectionName: string, forceClean: boolean = false) => {
+  const handleSyncAll = async (connectionId: string, connectionName: string, forceClean: boolean = false, providerSlug?: string) => {
     setSyncingId(connectionId);
     const actionName = forceClean ? 'resync completo' : 'sincronização completa';
     const toastId = toast.loading(`Iniciando ${actionName} de ${connectionName}...`);
@@ -129,7 +129,7 @@ export default function Integrations() {
     
     try {
       while (true) {
-        const result = await syncMutation.mutateAsync({ connectionId });
+        const result = await syncMutation.mutateAsync({ connectionId, providerSlug });
         
         if (!result.success) {
           const errorMsg = result.error || result.message || 'Erro desconhecido';
@@ -248,6 +248,7 @@ export default function Integrations() {
             const providerEndpoints = endpoints.filter(e => e.provider_id === conn.provider_id);
             const isSyncing = syncingId === conn.id;
             const isTesting = testingId === conn.id;
+            const providerSlug = conn.api_providers?.slug;
             
             return (
               <Card key={conn.id} className="transition-all hover:border-primary/30">
@@ -285,7 +286,7 @@ export default function Integrations() {
                       <Button 
                         variant="outline" 
                         size="sm" 
-                        onClick={() => handleTest(conn.id)} 
+                        onClick={() => handleTest(conn.id, providerSlug)} 
                         disabled={isTesting || isSyncing}
                       >
                         {isTesting ? (
@@ -313,17 +314,17 @@ export default function Integrations() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => handleSync(conn.id, conn.name)}>
+                          <DropdownMenuItem onClick={() => handleSync(conn.id, conn.name, providerSlug)}>
                             <RefreshCw className="mr-2 h-4 w-4" />
                             Próximo Pendente
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleSyncAll(conn.id, conn.name, false)}>
+                          <DropdownMenuItem onClick={() => handleSyncAll(conn.id, conn.name, false, providerSlug)}>
                             <RefreshCcw className="mr-2 h-4 w-4" />
                             Sincronizar Tudo
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem 
-                            onClick={() => handleSyncAll(conn.id, conn.name, true)}
+                            onClick={() => handleSyncAll(conn.id, conn.name, true, providerSlug)}
                             className="text-destructive focus:text-destructive"
                           >
                             <Trash2 className="mr-2 h-4 w-4" />
