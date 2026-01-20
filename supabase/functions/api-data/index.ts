@@ -81,7 +81,11 @@ serve(async (req) => {
     }
 
     // Fetch data from the appropriate table (normalize endpoint: replace hyphens with underscores)
-    const tableName = `${provider}_${endpoint.replace(/-/g, '_')}`;
+    const normalizedEndpoint = endpoint.replace(/-/g, '_');
+    const tableName = `${provider}_${normalizedEndpoint}`;
+    
+    // Get optional escola filter for SysEduca
+    const escolaFilter = url.searchParams.get('escola');
     
     // If fetchAll is true, we need to paginate through all records
     if (fetchAll) {
@@ -108,6 +112,11 @@ serve(async (req) => {
 
         if (endDate) {
           query = query.lte('created_at', endDate);
+        }
+
+        // Filter by escola for SysEduca
+        if (escolaFilter && provider === 'syseduca') {
+          query = query.eq('escola', escolaFilter);
         }
 
         const { data, error } = await query;
@@ -174,6 +183,11 @@ serve(async (req) => {
 
     if (endDate) {
       query = query.lte('created_at', endDate);
+    }
+
+    // Filter by escola for SysEduca
+    if (escolaFilter && provider === 'syseduca') {
+      query = query.eq('escola', escolaFilter);
     }
 
     query = query.range(offset, offset + limit - 1);

@@ -20,6 +20,7 @@ import {
   Database, 
   Link2, 
   Zap,
+  GraduationCap,
 } from 'lucide-react';
 
 const mainItems = [
@@ -28,6 +29,7 @@ const mainItems = [
   { title: 'Logs', url: '/logs', icon: History },
   { title: 'Dados', url: '/data', icon: Database },
   { title: 'Endpoints', url: '/endpoints', icon: Link2 },
+  { title: 'SysEduca', url: '/syseduca', icon: GraduationCap },
 ];
 
 
