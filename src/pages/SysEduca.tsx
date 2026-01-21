@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { PageHeader } from '@/components/ui/page-header';
@@ -45,11 +45,11 @@ export default function SysEduca() {
   });
 
   // Auto-select first connection
-  useState(() => {
+  useEffect(() => {
     if (connections.length > 0 && !selectedConnection) {
       setSelectedConnection(connections[0].id);
     }
-  });
+  }, [connections, selectedConnection]);
 
   // Fetch data for selected connection and year
   const { data: allData = [], isLoading } = useQuery({
