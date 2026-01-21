@@ -110,7 +110,7 @@ export default function SysEduca() {
     return allData.filter(row => row.escola === selectedSchool);
   }, [allData, selectedSchool]);
 
-  // Sync mutation with loop until complete
+  // Sync mutation with loop until complete + automatic retry on errors
   const syncMutation = useMutation({
     mutationFn: async () => {
       let offset = 0;
@@ -119,37 +119,72 @@ export default function SysEduca() {
       let totalRecords = 0;
       let schools = 0;
       let isFirstCall = true;
+      let retryCount = 0;
+      const MAX_RETRIES = 10;
 
       setSyncProgress({ processed: 0, total: 0 });
 
-      while (!completed) {
-        const response = await supabase.functions.invoke('syseduca-sync', {
-          body: { 
-            connectionId: selectedConnection, 
-            ano: selectedYear,
-            forceClean: isFirstCall && offset === 0,
-            startOffset: offset,
-          },
-        });
+      while (!completed && retryCount < MAX_RETRIES) {
+        try {
+          const response = await supabase.functions.invoke('syseduca-sync', {
+            body: { 
+              connectionId: selectedConnection, 
+              ano: selectedYear,
+              forceClean: isFirstCall && offset === 0,
+              startOffset: offset,
+            },
+          });
 
-        if (response.error) throw response.error;
-        
-        const data = response.data;
-        completed = data.completed;
-        offset = data.nextOffset || 0;
-        totalProcessed = data.processed;
-        totalRecords = data.totalRecords;
-        schools = data.schools || 0;
-        isFirstCall = false;
+          // Handle HTTP errors (including 500 timeouts)
+          if (response.error) {
+            retryCount++;
+            console.warn(`Sync error (attempt ${retryCount}/${MAX_RETRIES}):`, response.error);
+            
+            // Try to get nextOffset from response data if available
+            if (response.data?.nextOffset !== undefined) {
+              offset = response.data.nextOffset;
+            }
+            
+            const waitTime = Math.min(1000 * Math.pow(2, retryCount), 10000);
+            toast.warning(`Timeout, reiniciando em ${waitTime/1000}s... (${retryCount}/${MAX_RETRIES})`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            continue;
+          }
+          
+          // Success - reset retry counter
+          retryCount = 0;
+          
+          const data = response.data;
+          completed = data.completed;
+          offset = data.nextOffset || 0;
+          totalProcessed = data.processed;
+          totalRecords = data.totalRecords;
+          schools = data.schools || 0;
+          isFirstCall = false;
 
-        setSyncProgress({ processed: totalProcessed, total: totalRecords });
+          setSyncProgress({ processed: totalProcessed, total: totalRecords });
 
-        if (!completed) {
-          const message = data.message 
-            ? data.message 
-            : `${totalProcessed.toLocaleString()}/${totalRecords.toLocaleString()} registros`;
-          toast.info(`Sincronizando... ${message}`);
+          if (!completed) {
+            const percent = totalRecords > 0 ? Math.round((totalProcessed / totalRecords) * 100) : 0;
+            const message = data.message || `${totalProcessed.toLocaleString()}/${totalRecords.toLocaleString()}`;
+            toast.info(`Sincronizando... ${percent}% - ${message}`);
+          }
+        } catch (error: any) {
+          retryCount++;
+          console.error(`Unexpected error (attempt ${retryCount}/${MAX_RETRIES}):`, error);
+          
+          if (retryCount >= MAX_RETRIES) {
+            throw new Error(`Falha após ${MAX_RETRIES} tentativas: ${error.message}`);
+          }
+          
+          const waitTime = Math.min(1000 * Math.pow(2, retryCount), 10000);
+          toast.warning(`Erro, reiniciando em ${waitTime/1000}s...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
         }
+      }
+
+      if (!completed && retryCount >= MAX_RETRIES) {
+        throw new Error('Máximo de tentativas atingido');
       }
 
       setSyncProgress(null);

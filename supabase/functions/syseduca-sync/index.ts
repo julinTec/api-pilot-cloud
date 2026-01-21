@@ -214,13 +214,22 @@ serve(async (req) => {
   }
 
   const startTime = Date.now();
+  let body: SyncRequest;
+  
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(
+      JSON.stringify({ error: 'Invalid JSON body' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const body: SyncRequest = await req.json();
     const { connectionId, ano, forceClean, startOffset = 0 } = body;
 
     if (!connectionId) {
@@ -441,10 +450,13 @@ serve(async (req) => {
     console.error('Sync error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     
+    // Return partial state to allow frontend retry from same offset
     return new Response(
       JSON.stringify({ 
         success: false, 
         error: errorMessage,
+        completed: false,
+        nextOffset: body?.startOffset || 0, // Allow resuming from last known offset
         durationMs: Date.now() - startTime 
       }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
