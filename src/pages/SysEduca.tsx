@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { PageHeader } from '@/components/ui/page-header';
@@ -7,13 +7,21 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, School, Users, DollarSign, CheckCircle, XCircle, GraduationCap } from 'lucide-react';
+import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from '@/components/ui/pagination';
+import { RefreshCw, School, Users, DollarSign, CheckCircle, XCircle, GraduationCap, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
 
 const currentYear = new Date().getFullYear();
 const yearOptions = [currentYear, currentYear - 1, currentYear - 2];
+const PAGE_SIZE = 50;
+
+interface SchoolSummary {
+  escola: string;
+  registros: number;
+  alunos: number;
+  total_bruto: number;
+  total_pago: number;
+}
 
 export default function SysEduca() {
   const queryClient = useQueryClient();
@@ -21,6 +29,7 @@ export default function SysEduca() {
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
   const [selectedSchool, setSelectedSchool] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState<{ processed: number; total: number } | null>(null);
+  const [page, setPage] = useState(0);
 
   // Fetch SysEduca connections
   const { data: connections = [] } = useQuery({
@@ -51,64 +60,68 @@ export default function SysEduca() {
     }
   }, [connections, selectedConnection]);
 
-  // Fetch data for selected connection and year
-  const { data: allData = [], isLoading } = useQuery({
-    queryKey: ['syseduca-data', selectedConnection, selectedYear],
+  // Fetch school summary via RPC (aggregated data)
+  const { data: schoolStats = [], isLoading } = useQuery({
+    queryKey: ['syseduca-school-summary', selectedConnection, selectedYear],
     queryFn: async () => {
       if (!selectedConnection) return [];
 
       const { data, error } = await supabase
-        .from('syseduca_dados')
-        .select('*')
-        .eq('connection_id', selectedConnection)
-        .eq('ano', selectedYear)
-        .order('escola', { ascending: true });
+        .rpc('syseduca_school_summary', {
+          p_connection_id: selectedConnection,
+          p_ano: selectedYear,
+        });
 
       if (error) throw error;
-      return data || [];
+      
+      // Sort by registros descending
+      return (data || [])
+        .map((row: any) => ({
+          escola: row.escola,
+          registros: Number(row.registros),
+          alunos: Number(row.alunos),
+          total_bruto: Number(row.total_bruto),
+          total_pago: Number(row.total_pago),
+        }))
+        .sort((a: SchoolSummary, b: SchoolSummary) => b.registros - a.registros) as SchoolSummary[];
     },
     enabled: !!selectedConnection,
   });
 
-  // Calculate school statistics
-  const schoolStats = useMemo(() => {
-    const stats: Record<string, { 
-      count: number; 
-      totalBruto: number; 
-      totalPago: number;
-      alunosUnicos: Set<string>;
-    }> = {};
-
-    for (const row of allData) {
-      const escola = row.escola;
-      const data = row.data as Record<string, any>;
-
-      if (!stats[escola]) {
-        stats[escola] = { count: 0, totalBruto: 0, totalPago: 0, alunosUnicos: new Set() };
-      }
-
-      stats[escola].count += 1;
-      stats[escola].totalBruto += parseFloat(data.bruto) || 0;
-      stats[escola].totalPago += parseFloat(data.valor_pago) || 0;
-      stats[escola].alunosUnicos.add(row.matricula);
+  // Auto-select first school when data loads
+  useEffect(() => {
+    if (schoolStats.length > 0 && !selectedSchool) {
+      setSelectedSchool(schoolStats[0].escola);
     }
+  }, [schoolStats, selectedSchool]);
 
-    return Object.entries(stats)
-      .map(([escola, stat]) => ({
-        escola,
-        registros: stat.count,
-        alunos: stat.alunosUnicos.size,
-        totalBruto: stat.totalBruto,
-        totalPago: stat.totalPago,
-      }))
-      .sort((a, b) => b.registros - a.registros);
-  }, [allData]);
+  // Reset page when school changes
+  useEffect(() => {
+    setPage(0);
+  }, [selectedSchool]);
 
-  // Filter data by selected school
-  const filteredData = useMemo(() => {
-    if (!selectedSchool) return [];
-    return allData.filter(row => row.escola === selectedSchool);
-  }, [allData, selectedSchool]);
+  // Fetch paginated data for selected school
+  const { data: schoolData, isLoading: isLoadingSchoolData } = useQuery({
+    queryKey: ['syseduca-school-data', selectedConnection, selectedYear, selectedSchool, page],
+    queryFn: async () => {
+      if (!selectedConnection || !selectedSchool) return { data: [], count: 0 };
+
+      const { data, error, count } = await supabase
+        .from('syseduca_dados')
+        .select('*', { count: 'exact' })
+        .eq('connection_id', selectedConnection)
+        .eq('ano', selectedYear)
+        .eq('escola', selectedSchool)
+        .order('matricula', { ascending: true })
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+      if (error) throw error;
+      return { data: data || [], count: count || 0 };
+    },
+    enabled: !!selectedConnection && !!selectedSchool,
+  });
+
+  const totalPages = Math.ceil((schoolData?.count || 0) / PAGE_SIZE);
 
   // Sync mutation with loop until complete + automatic retry on errors
   const syncMutation = useMutation({
@@ -192,7 +205,8 @@ export default function SysEduca() {
     },
     onSuccess: (data) => {
       toast.success(`Sincronizado! ${data.processed.toLocaleString()} registros de ${data.schools} escolas.`);
-      queryClient.invalidateQueries({ queryKey: ['syseduca-data'] });
+      queryClient.invalidateQueries({ queryKey: ['syseduca-school-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['syseduca-school-data'] });
     },
     onError: (error: any) => {
       setSyncProgress(null);
@@ -206,6 +220,11 @@ export default function SysEduca() {
       currency: 'BRL',
     }).format(value);
   };
+
+  // Calculate totals from schoolStats
+  const totalAlunos = schoolStats.reduce((sum, s) => sum + s.alunos, 0);
+  const totalRegistros = schoolStats.reduce((sum, s) => sum + s.registros, 0);
+  const totalBruto = schoolStats.reduce((sum, s) => sum + s.total_bruto, 0);
 
   return (
     <div className="animate-fade-in space-y-6">
@@ -272,9 +291,7 @@ export default function SysEduca() {
               <Users className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-2xl font-bold">
-                {schoolStats.reduce((sum, s) => sum + s.alunos, 0).toLocaleString()}
-              </p>
+              <p className="text-2xl font-bold">{totalAlunos.toLocaleString()}</p>
               <p className="text-xs text-muted-foreground">Alunos</p>
             </div>
           </CardContent>
@@ -286,7 +303,7 @@ export default function SysEduca() {
               <DollarSign className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-2xl font-bold">{allData.length.toLocaleString()}</p>
+              <p className="text-2xl font-bold">{totalRegistros.toLocaleString()}</p>
               <p className="text-xs text-muted-foreground">Registros</p>
             </div>
           </CardContent>
@@ -298,9 +315,7 @@ export default function SysEduca() {
               <GraduationCap className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-2xl font-bold">
-                {formatCurrency(schoolStats.reduce((sum, s) => sum + s.totalBruto, 0))}
-              </p>
+              <p className="text-2xl font-bold">{formatCurrency(totalBruto)}</p>
               <p className="text-xs text-muted-foreground">Total Bruto</p>
             </div>
           </CardContent>
@@ -350,7 +365,7 @@ export default function SysEduca() {
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Total</span>
-                    <span className="font-medium text-primary">{formatCurrency(stat.totalBruto)}</span>
+                    <span className="font-medium text-primary">{formatCurrency(stat.total_bruto)}</span>
                   </div>
                 </CardContent>
               </Card>
@@ -365,72 +380,105 @@ export default function SysEduca() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
               <span>{selectedSchool}</span>
-              <Badge>{filteredData.length} registros</Badge>
+              <Badge>{(schoolData?.count || 0).toLocaleString()} registros</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Matrícula</TableHead>
-                    <TableHead>Aluno</TableHead>
-                    <TableHead>Responsável</TableHead>
-                    <TableHead className="text-center">Parcela</TableHead>
-                    <TableHead className="text-right">Bruto</TableHead>
-                    <TableHead className="text-right">Desconto</TableHead>
-                    <TableHead className="text-right">Líquido</TableHead>
-                    <TableHead className="text-center">Pago</TableHead>
-                    <TableHead>Pagamento</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredData.slice(0, 100).map((row) => {
-                    const data = row.data as Record<string, any>;
-                    const isPago = data.pago === 'S' || data.pago === 'Sim' || data.pago === true;
-                    
-                    return (
-                      <TableRow key={row.id}>
-                        <TableCell className="font-mono text-xs">{row.matricula}</TableCell>
-                        <TableCell className="max-w-[150px] truncate" title={data.a_nome}>
-                          {data.a_nome}
-                        </TableCell>
-                        <TableCell className="max-w-[150px] truncate" title={data.responsavel}>
-                          {data.responsavel}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {data.parcela}/{data.parcela_final}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {formatCurrency(parseFloat(data.bruto) || 0)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-muted-foreground">
-                          {formatCurrency(parseFloat(data.descontos) || 0)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono font-medium">
-                          {formatCurrency(parseFloat(data.liquido) || 0)}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {isPago ? (
-                            <CheckCircle className="mx-auto h-4 w-4 text-primary" />
-                          ) : (
-                            <XCircle className="mx-auto h-4 w-4 text-destructive" />
-                          )}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {data.pagamento || '-'}
-                        </TableCell>
+            {isLoadingSchoolData ? (
+              <div className="py-8 text-center text-muted-foreground">Carregando dados...</div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Matrícula</TableHead>
+                        <TableHead>Aluno</TableHead>
+                        <TableHead>Responsável</TableHead>
+                        <TableHead className="text-center">Parcela</TableHead>
+                        <TableHead className="text-right">Bruto</TableHead>
+                        <TableHead className="text-right">Desconto</TableHead>
+                        <TableHead className="text-right">Líquido</TableHead>
+                        <TableHead className="text-center">Pago</TableHead>
+                        <TableHead>Pagamento</TableHead>
                       </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-              {filteredData.length > 100 && (
-                <p className="mt-4 text-center text-sm text-muted-foreground">
-                  Exibindo 100 de {filteredData.length} registros
-                </p>
-              )}
-            </div>
+                    </TableHeader>
+                    <TableBody>
+                      {(schoolData?.data || []).map((row) => {
+                        const data = row.data as Record<string, any>;
+                        const isPago = data.pago === 'S' || data.pago === 'Sim' || data.pago === true;
+                        
+                        return (
+                          <TableRow key={row.id}>
+                            <TableCell className="font-mono text-xs">{row.matricula}</TableCell>
+                            <TableCell className="max-w-[150px] truncate" title={data.a_nome}>
+                              {data.a_nome}
+                            </TableCell>
+                            <TableCell className="max-w-[150px] truncate" title={data.responsavel}>
+                              {data.responsavel}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {data.parcela}/{data.parcela_final}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatCurrency(parseFloat(data.bruto) || 0)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-muted-foreground">
+                              {formatCurrency(parseFloat(data.descontos) || 0)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono font-medium">
+                              {formatCurrency(parseFloat(data.liquido) || 0)}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {isPago ? (
+                                <CheckCircle className="mx-auto h-4 w-4 text-primary" />
+                              ) : (
+                                <XCircle className="mx-auto h-4 w-4 text-destructive" />
+                              )}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {data.pagamento || '-'}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="mt-4 flex items-center justify-between">
+                    <p className="text-sm text-muted-foreground">
+                      Exibindo {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, schoolData?.count || 0)} de {(schoolData?.count || 0).toLocaleString()}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPage(p => Math.max(0, p - 1))}
+                        disabled={page === 0}
+                      >
+                        <ChevronLeft className="h-4 w-4 mr-1" />
+                        Anterior
+                      </Button>
+                      <span className="text-sm text-muted-foreground">
+                        Página {page + 1} de {totalPages}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                        disabled={page >= totalPages - 1}
+                      >
+                        Próximo
+                        <ChevronRight className="h-4 w-4 ml-1" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </CardContent>
         </Card>
       )}
