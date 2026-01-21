@@ -748,7 +748,16 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      syseduca_school_summary: {
+        Args: { p_ano: number; p_connection_id: string }
+        Returns: {
+          alunos: number
+          escola: string
+          registros: number
+          total_bruto: number
+          total_pago: number
+        }[]
+      }
     }
     Enums: {
       auth_type: "bearer_token" | "api_key" | "basic_auth" | "oauth2"
