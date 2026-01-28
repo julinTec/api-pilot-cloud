@@ -16,7 +16,7 @@ const eskEndpoints = [
 ];
 
 const sysEducaEndpoints = [
-  { provider: 'syseduca', endpoint: 'dados', name: 'Dados Financeiros', description: 'Matrículas, parcelas e pagamentos por escola' },
+  { provider: 'syseduca', endpoint: 'dados', name: 'Dados das Escolas - Consolidado', description: 'Dados consolidados de todas as escolas incluindo matrículas, pagamentos e informações financeiras' },
 ];
 
 export default function Endpoints() {
