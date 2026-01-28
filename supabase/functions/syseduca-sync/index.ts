@@ -21,8 +21,98 @@ interface SyncRequest {
 function parseNumber(value: string | number): number {
   if (typeof value === 'number') return value;
   if (!value) return 0;
-  const normalized = value.toString().replace(',', '.');
+
+  // Handles formats like:
+  // - "123,45"  => 123.45
+  // - "1.234,56" => 1234.56
+  // - "1234.56" => 1234.56
+  const raw = value.toString().trim();
+  if (!raw) return 0;
+
+  const normalized = raw.includes(',')
+    ? raw.replace(/\./g, '').replace(',', '.')
+    : raw;
+
   return parseFloat(normalized) || 0;
+}
+
+function decodeHtml(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeKey(key: string): string {
+  return key
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+}
+
+function parseHtmlTableToRecords(html: string): any[] {
+  // Extract rows
+  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  const cellRegex = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+
+  const rows: string[][] = [];
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = rowRegex.exec(html))) {
+    const rowHtml = rowMatch[1];
+    const cells: string[] = [];
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = cellRegex.exec(rowHtml))) {
+      const cellHtml = cellMatch[1]
+        .replace(/<[^>]+>/g, '')
+        .replace(/\r?\n/g, '');
+      cells.push(decodeHtml(cellHtml));
+    }
+    if (cells.length) rows.push(cells);
+  }
+
+  if (rows.length < 2) {
+    throw new Error('HTML table parsing failed: no data rows found');
+  }
+
+  const headersRaw = rows[0];
+  const headers = headersRaw.map(normalizeKey);
+
+  const records: any[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const obj: Record<string, any> = {};
+    for (let c = 0; c < headers.length; c++) {
+      const k = headers[c] || `col_${c}`;
+      obj[k] = row[c] ?? '';
+    }
+    records.push(obj);
+  }
+
+  // Map common SysEduca export column names to canonical fields expected downstream
+  // (we keep all original columns too).
+  return records.map((r) => {
+    const escola = r.escola || r.unidade || r.unidades || r.school || r.unidade_escolar;
+    const matricula = r.matricula || r.matricula_aluno || r.codigo_matricula;
+    const parcela = r.parcela || r.parcelas || r.nr_parcela || r.numero_parcela || r.parc || '0';
+    const ano = r.ano || r.ano_letivo;
+
+    return {
+      ...r,
+      escola: escola ?? r.escola ?? 'Não informado',
+      matricula: matricula ?? r.matricula ?? '',
+      parcela: parcela ?? r.parcela ?? '0',
+      ano: ano ?? r.ano,
+    };
+  });
 }
 
 // Generate unique external_id from escola + matricula + parcela
@@ -301,23 +391,29 @@ serve(async (req) => {
         throw new Error(`API returned ${response.status}: ${response.statusText}`);
       }
 
-      // Check content type before parsing
+      // Parse either JSON or HTML-table (Excel export) format
       const contentType = response.headers.get('content-type') || '';
       const responseText = await response.text();
+      const trimmed = responseText.trimStart();
       
       console.log(`Response content-type: ${contentType}`);
       console.log(`Response first 200 chars: ${responseText.substring(0, 200)}`);
-      
-      if (!contentType.includes('application/json') && responseText.startsWith('<!DOCTYPE')) {
-        throw new Error(`API returned HTML instead of JSON. Check if the URL is correct: ${apiUrl}`);
-      }
 
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error(`JSON parse error. Response starts with: ${responseText.substring(0, 100)}`);
-        throw new Error(`Invalid JSON response from API`);
+      let data: any;
+      const looksLikeHtml = trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html') || trimmed.startsWith('<table');
+      if (looksLikeHtml) {
+        // SysEduca sometimes returns an HTML table intended for Excel (.xls)
+        console.log('Detected HTML response; parsing as table...');
+        const parsed = parseHtmlTableToRecords(responseText);
+        console.log(`Parsed ${parsed.length} rows from HTML table`);
+        data = parsed;
+      } else {
+        try {
+          data = JSON.parse(responseText);
+        } catch {
+          console.error(`JSON parse error. Response starts with: ${responseText.substring(0, 100)}`);
+          throw new Error('Invalid JSON response from API');
+        }
       }
 
       if (!Array.isArray(data)) {
