@@ -285,9 +285,9 @@ serve(async (req) => {
       totalRecords = cached.total_records;
     } else {
       // PHASE 1: Fetch from API and save to cache
+      // base_url already contains full URL: https://www.syseduca.com.br/api/dados04.asp
       const baseUrl = connection.api_providers.base_url;
-      const apiPath = endpoint?.path || '/dados02.asp';
-      const apiUrl = `${baseUrl}${apiPath}?ano=${currentYear}`;
+      const apiUrl = `${baseUrl}?ano=${currentYear}`;
 
       console.log(`Fetching SysEduca data from: ${apiUrl}`);
 
