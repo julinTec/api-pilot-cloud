@@ -293,13 +293,35 @@ serve(async (req) => {
 
       const response = await fetch(apiUrl);
       
+      console.log(`API response status: ${response.status}, content-type: ${response.headers.get('content-type')}`);
+      
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`API error response (first 500 chars): ${errorText.substring(0, 500)}`);
         throw new Error(`API returned ${response.status}: ${response.statusText}`);
       }
 
-      const data = await response.json();
+      // Check content type before parsing
+      const contentType = response.headers.get('content-type') || '';
+      const responseText = await response.text();
+      
+      console.log(`Response content-type: ${contentType}`);
+      console.log(`Response first 200 chars: ${responseText.substring(0, 200)}`);
+      
+      if (!contentType.includes('application/json') && responseText.startsWith('<!DOCTYPE')) {
+        throw new Error(`API returned HTML instead of JSON. Check if the URL is correct: ${apiUrl}`);
+      }
+
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error(`JSON parse error. Response starts with: ${responseText.substring(0, 100)}`);
+        throw new Error(`Invalid JSON response from API`);
+      }
 
       if (!Array.isArray(data)) {
+        console.error(`API response is not an array. Type: ${typeof data}, keys: ${Object.keys(data || {}).join(', ')}`);
         throw new Error('API response is not an array');
       }
 
