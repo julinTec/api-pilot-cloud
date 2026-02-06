@@ -135,7 +135,7 @@ export default function Endpoints() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div>
-                      <p className="text-xs text-muted-foreground mb-1">URL da API (Power BI - POST):</p>
+                      <p className="text-xs text-muted-foreground mb-1">URL da API (acesso público):</p>
                       <div className="flex items-center gap-2">
                         <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{rpcUrl}</code>
                         <Button variant="outline" size="icon" onClick={() => copyUrl(rpcUrl)} title="Copiar URL">
@@ -152,10 +152,10 @@ export default function Endpoints() {
                         </Button>
                       </div>
                     </div>
-                    <Alert className="bg-muted/50 border-muted">
-                      <Info className="h-4 w-4" />
+                    <Alert className="bg-primary/10 border-primary/30">
+                      <Info className="h-4 w-4 text-primary" />
                       <AlertDescription className="text-xs">
-                        No Power BI: <strong>Obter Dados → Web (Avançado)</strong> → Método POST → Headers: <code>Content-Type: application/json</code>, <code>apikey: [sua_anon_key]</code>
+                        <strong>API Pública!</strong> No Power BI: <strong>Obter Dados → Web (Avançado)</strong> → Método POST → Header: <code>Content-Type: application/json</code>
                       </AlertDescription>
                     </Alert>
                   </CardContent>
