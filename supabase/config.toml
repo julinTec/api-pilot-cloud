@@ -2,3 +2,15 @@ project_id = "upollywzkslmzgvdrtzl"
 
 [functions.api-data]
 verify_jwt = false
+
+[functions.file-data]
+verify_jwt = false
+
+[functions.process-file]
+verify_jwt = false
+
+[functions.eskolare-sync]
+verify_jwt = false
+
+[functions.syseduca-sync]
+verify_jwt = false
