@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
 import { FileUploader } from '@/components/files/FileUploader';
-import { FileSpreadsheet, Plus, RefreshCw, Trash2, Loader2, Clock, CheckCircle, AlertCircle, FileText } from 'lucide-react';
+import { FileSpreadsheet, Plus, RefreshCw, Trash2, Loader2, Clock, CheckCircle, AlertCircle, FileText, Copy, ExternalLink } from 'lucide-react';
 import type { FileSource } from '@/types/auth';
 
 export default function FileIntegrations() {
@@ -21,6 +21,7 @@ export default function FileIntegrations() {
   const [files, setFiles] = useState<FileSource[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [processingId, setProcessingId] = useState<string | null>(null);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
 
   // Upload form state
@@ -29,6 +30,8 @@ export default function FileIntegrations() {
   const [fileDescription, setFileDescription] = useState('');
   const [fileCategory, setFileCategory] = useState('');
   const [fileTags, setFileTags] = useState('');
+
+  const baseApiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/api-data`;
 
   useEffect(() => {
     fetchFiles();
@@ -43,7 +46,7 @@ export default function FileIntegrations() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setFiles((data || []) as FileSource[]);
+      setFiles((data || []) as unknown as FileSource[]);
     } catch (error) {
       console.error('Error fetching files:', error);
       toast.error('Erro ao carregar arquivos');
@@ -68,6 +71,15 @@ export default function FileIntegrations() {
     return 'unknown';
   };
 
+  const generateSlug = (name: string): string => {
+    return name
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+  };
+
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile || !user) return;
@@ -78,6 +90,7 @@ export default function FileIntegrations() {
       // Generate unique file path
       const fileExt = selectedFile.name.split('.').pop();
       const filePath = `${user.id}/${Date.now()}.${fileExt}`;
+      const slug = generateSlug(fileName);
 
       // Upload to storage
       const { error: uploadError } = await supabase.storage
@@ -87,10 +100,11 @@ export default function FileIntegrations() {
       if (uploadError) throw uploadError;
 
       // Create file_sources record
-      const { error: dbError } = await supabase
+      const { data: insertedFile, error: dbError } = await supabase
         .from('file_sources')
         .insert({
           name: fileName,
+          slug,
           description: fileDescription,
           file_type: getFileType(selectedFile.name),
           file_path: filePath,
@@ -102,12 +116,14 @@ export default function FileIntegrations() {
           },
           status: 'pending',
           created_by: user.id,
-        });
+        })
+        .select()
+        .single();
 
       if (dbError) throw dbError;
 
       toast.success('Arquivo enviado!', {
-        description: 'O arquivo será processado em breve.',
+        description: 'Processando dados...',
       });
 
       // Reset form
@@ -118,12 +134,44 @@ export default function FileIntegrations() {
       setFileCategory('');
       setFileTags('');
       fetchFiles();
+
+      // Auto-process the file
+      if (insertedFile) {
+        await handleProcessFile(insertedFile.id);
+      }
     } catch (error: any) {
       toast.error('Erro ao enviar arquivo', {
         description: error.message,
       });
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleProcessFile = async (fileId: string) => {
+    setProcessingId(fileId);
+    try {
+      const { data, error } = await supabase.functions.invoke('process-file', {
+        body: { fileSourceId: fileId },
+      });
+
+      if (error) throw error;
+
+      if (data.success) {
+        toast.success('Arquivo processado!', {
+          description: `${data.records_count} registros importados. API disponível!`,
+        });
+      } else {
+        throw new Error(data.error || 'Erro desconhecido');
+      }
+
+      fetchFiles();
+    } catch (error: any) {
+      toast.error('Erro ao processar arquivo', {
+        description: error.message,
+      });
+    } finally {
+      setProcessingId(null);
     }
   };
 
@@ -136,7 +184,7 @@ export default function FileIntegrations() {
         .from('file-sources')
         .remove([file.file_path]);
 
-      // Delete from database
+      // Delete from database (cascade will delete file_source_data)
       const { error } = await supabase
         .from('file_sources')
         .delete()
@@ -151,6 +199,12 @@ export default function FileIntegrations() {
         description: error.message,
       });
     }
+  };
+
+  const copyApiUrl = (slug: string) => {
+    const url = `${baseApiUrl}?provider=files&endpoint=${slug}`;
+    navigator.clipboard.writeText(url);
+    toast.success('URL da API copiada!');
   };
 
   const getStatusBadge = (status: string) => {
@@ -203,7 +257,7 @@ export default function FileIntegrations() {
       <div className="flex items-center justify-between">
         <PageHeader
           title="Integrações de Arquivos"
-          description="Importe e gerencie dados de arquivos Excel, CSV e Parquet"
+          description="Importe arquivos Excel/CSV e gere APIs acessíveis automaticamente"
         />
         {isAdmin && (
           <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
@@ -218,7 +272,7 @@ export default function FileIntegrations() {
                 <DialogHeader>
                   <DialogTitle>Importar Arquivo</DialogTitle>
                   <DialogDescription>
-                    Faça upload de um arquivo Excel, CSV ou Parquet
+                    Faça upload de um arquivo Excel ou CSV para gerar uma API
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
@@ -228,7 +282,7 @@ export default function FileIntegrations() {
                   />
 
                   <div className="space-y-2">
-                    <Label htmlFor="name">Nome da Integração *</Label>
+                    <Label htmlFor="name">Nome da API *</Label>
                     <Input
                       id="name"
                       value={fileName}
@@ -236,6 +290,9 @@ export default function FileIntegrations() {
                       placeholder="Ex: Vendas Q1 2024"
                       required
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Slug: {fileName ? generateSlug(fileName) : '-'}
+                    </p>
                   </div>
 
                   <div className="space-y-2">
@@ -283,7 +340,7 @@ export default function FileIntegrations() {
                   </Button>
                   <Button type="submit" disabled={!selectedFile || isUploading}>
                     {isUploading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Enviar Arquivo
+                    Enviar e Processar
                   </Button>
                 </DialogFooter>
               </form>
@@ -294,9 +351,9 @@ export default function FileIntegrations() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Arquivos Importados</CardTitle>
+          <CardTitle>Arquivos e APIs</CardTitle>
           <CardDescription>
-            Lista de todos os arquivos de dados externos
+            Cada arquivo processado gera uma API acessível via <code className="bg-muted px-1 py-0.5 rounded text-xs">provider=files</code>
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -323,16 +380,16 @@ export default function FileIntegrations() {
                 <TableRow>
                   <TableHead>Nome</TableHead>
                   <TableHead>Tipo</TableHead>
-                  <TableHead>Tamanho</TableHead>
                   <TableHead>Registros</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Criado em</TableHead>
-                  {isAdmin && <TableHead className="text-right">Ações</TableHead>}
+                  <TableHead>API Endpoint</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {files.map((file) => {
                   const FileIcon = getFileIcon(file.file_type);
+                  const fileWithSlug = file as FileSource & { slug?: string };
                   return (
                     <TableRow key={file.id}>
                       <TableCell>
@@ -355,31 +412,107 @@ export default function FileIntegrations() {
                           {file.file_type}
                         </Badge>
                       </TableCell>
-                      <TableCell>{formatFileSize(file.file_size_bytes)}</TableCell>
                       <TableCell>
                         {file.records_count > 0 ? file.records_count.toLocaleString('pt-BR') : '-'}
                       </TableCell>
                       <TableCell>{getStatusBadge(file.status)}</TableCell>
                       <TableCell>
-                        {new Date(file.created_at).toLocaleDateString('pt-BR')}
+                        {file.status === 'ready' && fileWithSlug.slug ? (
+                          <div className="flex items-center gap-2">
+                            <code className="text-xs bg-muted px-2 py-1 rounded">
+                              files/{fileWithSlug.slug}
+                            </code>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() => copyApiUrl(fileWithSlug.slug!)}
+                              title="Copiar URL da API"
+                            >
+                              <Copy className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground text-sm">-</span>
+                        )}
                       </TableCell>
-                      {isAdmin && (
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDelete(file)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </TableCell>
-                      )}
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          {file.status === 'pending' && isAdmin && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleProcessFile(file.id)}
+                              disabled={processingId === file.id}
+                            >
+                              {processingId === file.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
+                            </Button>
+                          )}
+                          {file.status === 'ready' && fileWithSlug.slug && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              asChild
+                            >
+                              <a
+                                href={`${baseApiUrl}?provider=files&endpoint=${fileWithSlug.slug}&limit=10`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                              </a>
+                            </Button>
+                          )}
+                          {isAdmin && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDelete(file)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
                     </TableRow>
                   );
                 })}
               </TableBody>
             </Table>
           )}
+        </CardContent>
+      </Card>
+
+      {/* API Usage Info */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Como usar as APIs</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <p className="font-medium mb-2">Listar arquivos disponíveis:</p>
+            <code className="block bg-muted p-3 rounded text-sm">
+              GET {baseApiUrl}?provider=files
+            </code>
+          </div>
+          <div>
+            <p className="font-medium mb-2">Buscar dados de um arquivo:</p>
+            <code className="block bg-muted p-3 rounded text-sm">
+              GET {baseApiUrl}?provider=files&endpoint=&#123;slug&#125;
+            </code>
+          </div>
+          <div>
+            <p className="font-medium mb-2">Parâmetros opcionais:</p>
+            <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+              <li><code>limit</code> - Limite de registros (padrão: 1000)</li>
+              <li><code>offset</code> - Offset para paginação</li>
+              <li><code>all=true</code> - Buscar todos os registros (Power BI)</li>
+            </ul>
+          </div>
         </CardContent>
       </Card>
     </div>
