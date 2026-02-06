@@ -1,15 +1,17 @@
-// File Data API - serves file source data for Power BI
+// File Data API - serves file source data for Power BI (PUBLIC - no auth required)
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
 };
 
 serve(async (req) => {
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response('ok', { headers: corsHeaders });
   }
 
   try {
@@ -20,7 +22,7 @@ serve(async (req) => {
     const url = new URL(req.url);
     const slug = url.searchParams.get('slug');
 
-    console.log(`File Data API: slug=${slug}`);
+    console.log(`File Data API (public): slug=${slug}`);
 
     // If no slug, list available files
     if (!slug) {
@@ -31,7 +33,7 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({
-          message: 'Available file sources',
+          message: 'Arquivos disponíveis',
           files: fileSources,
           usage: 'GET /file-data?slug={file_slug}',
         }),
@@ -50,8 +52,8 @@ serve(async (req) => {
     if (fileError || !fileSource) {
       return new Response(
         JSON.stringify({ 
-          error: `File source '${slug}' not found`,
-          hint: 'Check available files using GET /file-data'
+          error: `Arquivo '${slug}' não encontrado`,
+          hint: 'Consulte arquivos disponíveis em GET /file-data'
         }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -85,7 +87,7 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Returning ${allData.length} records for ${slug}`);
+    console.log(`Retornando ${allData.length} registros para ${slug}`);
 
     return new Response(
       JSON.stringify({
