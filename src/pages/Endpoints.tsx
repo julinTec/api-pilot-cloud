@@ -116,9 +116,8 @@ export default function Endpoints() {
             </div>
           ) : (
             fileSources?.map((file) => {
-              // Use RPC endpoint which is more stable than Edge Functions
-              const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/get_file_data`;
-              const rpcBody = JSON.stringify({ p_slug: file.slug });
+              // Simple GET endpoint - no auth required
+              const fullUrl = `${SUPABASE_URL}/functions/v1/file-data?slug=${file.slug}`;
               return (
                 <Card key={file.id}>
                   <CardHeader className="pb-2">
@@ -135,27 +134,23 @@ export default function Endpoints() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div>
-                      <p className="text-xs text-muted-foreground mb-1">URL da API (acesso público):</p>
+                      <p className="text-xs text-muted-foreground mb-1">URL da API (acesso direto - sem autenticação):</p>
                       <div className="flex items-center gap-2">
-                        <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{rpcUrl}</code>
-                        <Button variant="outline" size="icon" onClick={() => copyUrl(rpcUrl)} title="Copiar URL">
+                        <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{fullUrl}</code>
+                        <Button variant="outline" size="icon" onClick={() => copyUrl(fullUrl)} title="Copiar URL">
                           <Copy className="h-4 w-4" />
                         </Button>
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">Body JSON (para a requisição POST):</p>
-                      <div className="flex items-center gap-2">
-                        <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{rpcBody}</code>
-                        <Button variant="outline" size="icon" onClick={() => copyUrl(rpcBody)} title="Copiar Body">
-                          <Copy className="h-4 w-4" />
+                        <Button variant="outline" size="icon" asChild title="Testar no navegador">
+                          <a href={fullUrl} target="_blank" rel="noopener noreferrer">
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
                         </Button>
                       </div>
                     </div>
                     <Alert className="bg-primary/10 border-primary/30">
                       <Info className="h-4 w-4 text-primary" />
                       <AlertDescription className="text-xs">
-                        <strong>API Pública!</strong> No Power BI: <strong>Obter Dados → Web (Avançado)</strong> → Método POST → Header: <code>Content-Type: application/json</code>
+                        <strong>API Pública!</strong> Cole direto no Power BI: <strong>Obter Dados → Web</strong> → Cole a URL → OK
                       </AlertDescription>
                     </Alert>
                   </CardContent>
