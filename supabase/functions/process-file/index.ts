@@ -1,21 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import initParquet, { readParquet } from "https://esm.sh/parquet-wasm@0.6.1/esm/parquet_wasm.js";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-
-let parquetInitialized = false;
-
-// Initialize parquet-wasm
-async function initParquetWasm() {
-  if (!parquetInitialized) {
-    await initParquet();
-    parquetInitialized = true;
-  }
-}
 
 // Parse CSV content
 function parseCSV(content: string): { headers: string[], rows: Record<string, any>[] } {
@@ -48,38 +37,40 @@ function parseCSV(content: string): { headers: string[], rows: Record<string, an
   return { headers, rows };
 }
 
-// Parse Parquet content using parquet-wasm
+// Parse Parquet content using parquetjs
 async function parseParquet(fileData: Blob): Promise<Record<string, any>[]> {
-  await initParquetWasm();
+  // Dynamic import of parquetjs
+  const parquet = await import("npm:parquetjs@0.11.2");
   
   const arrayBuffer = await fileData.arrayBuffer();
-  const uint8Array = new Uint8Array(arrayBuffer);
+  const buffer = new Uint8Array(arrayBuffer);
   
-  // Read parquet file - returns Arrow IPC format
-  const arrowBuffer = readParquet(uint8Array);
+  // Write to temp file for parquetjs to read
+  const tempPath = `/tmp/parquet_${Date.now()}.parquet`;
+  await Deno.writeFile(tempPath, buffer);
   
-  // Parse Arrow IPC to get records
-  // The arrow buffer contains the data in Arrow format
-  // We need to decode it - for simplicity, we'll use a basic approach
-  const rows: Record<string, any>[] = [];
-  
-  // Use Apache Arrow JS to read the buffer
-  const { tableFromIPC } = await import("https://esm.sh/apache-arrow@15.0.2");
-  const table = tableFromIPC(arrowBuffer);
-  
-  // Convert Arrow table to array of objects
-  for (let i = 0; i < table.numRows; i++) {
-    const row: Record<string, any> = {};
-    for (const field of table.schema.fields) {
-      const column = table.getChild(field.name);
-      if (column) {
-        row[field.name] = column.get(i);
-      }
+  try {
+    // Open parquet file reader
+    const reader = await parquet.ParquetReader.openFile(tempPath);
+    const cursor = reader.getCursor();
+    
+    const rows: Record<string, any>[] = [];
+    let record = null;
+    
+    while ((record = await cursor.next())) {
+      rows.push(record);
     }
-    rows.push(row);
+    
+    await reader.close();
+    return rows;
+  } finally {
+    // Clean up temp file
+    try {
+      await Deno.remove(tempPath);
+    } catch {
+      // Ignore cleanup errors
+    }
   }
-  
-  return rows;
 }
 
 // Generate slug from name
