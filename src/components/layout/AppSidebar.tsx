@@ -1,5 +1,6 @@
 import { useLocation } from 'react-router-dom';
 import { NavLink } from '@/components/NavLink';
+import { useAuth } from '@/hooks/useAuth';
 import {
   Sidebar,
   SidebarContent,
@@ -21,7 +22,11 @@ import {
   Link2, 
   Zap,
   GraduationCap,
+  Users,
+  FileSpreadsheet,
+  LogOut,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 const mainItems = [
   { title: 'Dashboard', url: '/', icon: LayoutDashboard },
@@ -30,15 +35,24 @@ const mainItems = [
   { title: 'Dados', url: '/data', icon: Database },
   { title: 'Endpoints', url: '/endpoints', icon: Link2 },
   { title: 'SysEduca', url: '/syseduca', icon: GraduationCap },
+  { title: 'Arquivos', url: '/files', icon: FileSpreadsheet },
 ];
 
+const adminItems = [
+  { title: 'Usuários', url: '/users', icon: Users },
+];
 
 export function AppSidebar() {
   const { state } = useSidebar();
   const location = useLocation();
+  const { profile, isAdmin, signOut } = useAuth();
   const collapsed = state === 'collapsed';
 
   const isActive = (path: string) => location.pathname === path;
+
+  const handleLogout = async () => {
+    await signOut();
+  };
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
@@ -83,13 +97,70 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
+        {isAdmin && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Administração</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {adminItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive(item.url)}
+                      tooltip={item.title}
+                    >
+                      <NavLink
+                        to={item.url}
+                        className="flex items-center gap-3"
+                        activeClassName="bg-sidebar-accent text-sidebar-accent-foreground"
+                      >
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter className="p-4">
-        {!collapsed && (
-          <div className="text-xs text-muted-foreground">
-            © 2024 API Data Hub
+        {!collapsed ? (
+          <div className="space-y-3">
+            {profile && (
+              <div className="text-sm">
+                <p className="font-medium text-sidebar-foreground truncate">
+                  {profile.full_name || profile.email}
+                </p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {profile.email}
+                </p>
+              </div>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2"
+              onClick={handleLogout}
+            >
+              <LogOut className="h-4 w-4" />
+              Sair
+            </Button>
+            <div className="text-xs text-muted-foreground">
+              © 2024 API Data Hub
+            </div>
           </div>
+        ) : (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleLogout}
+            title="Sair"
+          >
+            <LogOut className="h-4 w-4" />
+          </Button>
         )}
       </SidebarFooter>
     </Sidebar>

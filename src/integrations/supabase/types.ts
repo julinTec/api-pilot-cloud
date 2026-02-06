@@ -677,6 +677,81 @@ export type Database = {
           },
         ]
       }
+      file_sources: {
+        Row: {
+          column_mapping: Json | null
+          created_at: string | null
+          created_by: string | null
+          description: string | null
+          file_path: string
+          file_size_bytes: number | null
+          file_type: string
+          id: string
+          last_processed_at: string | null
+          metadata: Json | null
+          name: string
+          records_count: number | null
+          status: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          column_mapping?: Json | null
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          file_path: string
+          file_size_bytes?: number | null
+          file_type: string
+          id?: string
+          last_processed_at?: string | null
+          metadata?: Json | null
+          name: string
+          records_count?: number | null
+          status?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          column_mapping?: Json | null
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          file_path?: string
+          file_size_bytes?: number | null
+          file_type?: string
+          id?: string
+          last_processed_at?: string | null
+          metadata?: Json | null
+          name?: string
+          records_count?: number | null
+          status?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string | null
+          email: string
+          full_name: string | null
+          id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          email: string
+          full_name?: string | null
+          id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          email?: string
+          full_name?: string | null
+          id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       syseduca_dados: {
         Row: {
           ano: number
@@ -743,11 +818,74 @@ export type Database = {
         }
         Relationships: []
       }
+      user_connection_access: {
+        Row: {
+          can_manage: boolean | null
+          can_sync: boolean | null
+          can_view: boolean | null
+          connection_id: string
+          created_at: string | null
+          id: string
+          user_id: string
+        }
+        Insert: {
+          can_manage?: boolean | null
+          can_sync?: boolean | null
+          can_view?: boolean | null
+          connection_id: string
+          created_at?: string | null
+          id?: string
+          user_id: string
+        }
+        Update: {
+          can_manage?: boolean | null
+          can_sync?: boolean | null
+          can_view?: boolean | null
+          connection_id?: string
+          created_at?: string | null
+          id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_connection_access_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "api_connections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_roles: {
+        Row: {
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
       syseduca_school_summary: {
         Args: { p_ano: number; p_connection_id: string }
         Returns: {
@@ -760,6 +898,7 @@ export type Database = {
       }
     }
     Enums: {
+      app_role: "admin" | "user"
       auth_type: "bearer_token" | "api_key" | "basic_auth" | "oauth2"
       execution_status: "pending" | "running" | "success" | "error"
       sync_status: "active" | "paused" | "error"
@@ -890,6 +1029,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      app_role: ["admin", "user"],
       auth_type: ["bearer_token", "api_key", "basic_auth", "oauth2"],
       execution_status: ["pending", "running", "success", "error"],
       sync_status: ["active", "paused", "error"],
