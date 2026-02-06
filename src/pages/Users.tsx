@@ -13,8 +13,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
 import { Users as UsersIcon, Plus, Shield, ShieldCheck, Trash2, Loader2 } from 'lucide-react';
-import type { Profile, AppRole, UserConnectionAccess } from '@/types/auth';
+import type { Profile, AppRole, UserConnectionAccess, FileSource } from '@/types/auth';
 import type { ApiConnection } from '@/types/api';
+
+interface UserFileAccess {
+  id: string;
+  user_id: string;
+  file_source_id: string;
+  can_view: boolean;
+  can_manage: boolean;
+  created_at: string;
+}
 
 interface UserWithRole extends Profile {
   role: AppRole;
@@ -24,12 +33,14 @@ export default function Users() {
   const { isAdmin } = useAuth();
   const [users, setUsers] = useState<UserWithRole[]>([]);
   const [connections, setConnections] = useState<ApiConnection[]>([]);
+  const [fileSources, setFileSources] = useState<FileSource[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showPermissionsDialog, setShowPermissionsDialog] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserWithRole | null>(null);
   const [userPermissions, setUserPermissions] = useState<UserConnectionAccess[]>([]);
+  const [userFilePermissions, setUserFilePermissions] = useState<UserFileAccess[]>([]);
 
   // New user form
   const [newEmail, setNewEmail] = useState('');
@@ -41,6 +52,7 @@ export default function Users() {
     if (isAdmin) {
       fetchUsers();
       fetchConnections();
+      fetchFileSources();
     }
   }, [isAdmin]);
 
@@ -93,15 +105,33 @@ export default function Users() {
     }
   };
 
-  const fetchUserPermissions = async (userId: string) => {
+  const fetchFileSources = async () => {
     try {
       const { data, error } = await supabase
-        .from('user_connection_access')
+        .from('file_sources')
         .select('*')
-        .eq('user_id', userId);
+        .eq('status', 'ready')
+        .order('name');
 
       if (error) throw error;
-      setUserPermissions(data || []);
+      setFileSources((data || []) as unknown as FileSource[]);
+    } catch (error) {
+      console.error('Error fetching file sources:', error);
+    }
+  };
+
+  const fetchUserPermissions = async (userId: string) => {
+    try {
+      const [connResult, fileResult] = await Promise.all([
+        supabase.from('user_connection_access').select('*').eq('user_id', userId),
+        supabase.from('user_file_access').select('*').eq('user_id', userId),
+      ]);
+
+      if (connResult.error) throw connResult.error;
+      if (fileResult.error) throw fileResult.error;
+
+      setUserPermissions(connResult.data || []);
+      setUserFilePermissions(fileResult.data || []);
     } catch (error) {
       console.error('Error fetching permissions:', error);
       toast.error('Erro ao carregar permissões');
@@ -223,6 +253,49 @@ export default function Users() {
 
   const getPermission = (connectionId: string, field: 'can_view' | 'can_sync' | 'can_manage') => {
     const permission = userPermissions.find(p => p.connection_id === connectionId);
+    return permission ? permission[field] : false;
+  };
+
+  const handleToggleFilePermission = async (
+    fileSourceId: string,
+    field: 'can_view' | 'can_manage',
+    value: boolean
+  ) => {
+    if (!selectedUser) return;
+
+    try {
+      const existingPermission = userFilePermissions.find(p => p.file_source_id === fileSourceId);
+
+      if (existingPermission) {
+        const { error } = await supabase
+          .from('user_file_access')
+          .update({ [field]: value })
+          .eq('id', existingPermission.id);
+
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('user_file_access')
+          .insert({
+            user_id: selectedUser.id,
+            file_source_id: fileSourceId,
+            [field]: value,
+          });
+
+        if (error) throw error;
+      }
+
+      fetchUserPermissions(selectedUser.id);
+      toast.success('Permissão atualizada!');
+    } catch (error: any) {
+      toast.error('Erro ao atualizar permissão', {
+        description: error.message,
+      });
+    }
+  };
+
+  const getFilePermission = (fileSourceId: string, field: 'can_view' | 'can_manage') => {
+    const permission = userFilePermissions.find(p => p.file_source_id === fileSourceId);
     return permission ? permission[field] : false;
   };
 
@@ -406,55 +479,103 @@ export default function Users() {
 
       {/* Permissions Dialog */}
       <Dialog open={showPermissionsDialog} onOpenChange={setShowPermissionsDialog}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Permissões de Acesso</DialogTitle>
             <DialogDescription>
-              Configure as permissões de {selectedUser?.email} para cada conexão de API
+              Configure as permissões de {selectedUser?.email}
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            {connections.length === 0 ? (
-              <div className="text-center py-4 text-muted-foreground">
-                Nenhuma conexão de API disponível
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Conexão</TableHead>
-                    <TableHead className="text-center">Visualizar</TableHead>
-                    <TableHead className="text-center">Sincronizar</TableHead>
-                    <TableHead className="text-center">Gerenciar</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {connections.map((conn) => (
-                    <TableRow key={conn.id}>
-                      <TableCell className="font-medium">{conn.name}</TableCell>
-                      <TableCell className="text-center">
-                        <Switch
-                          checked={getPermission(conn.id, 'can_view')}
-                          onCheckedChange={(v) => handleTogglePermission(conn.id, 'can_view', v)}
-                        />
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <Switch
-                          checked={getPermission(conn.id, 'can_sync')}
-                          onCheckedChange={(v) => handleTogglePermission(conn.id, 'can_sync', v)}
-                        />
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <Switch
-                          checked={getPermission(conn.id, 'can_manage')}
-                          onCheckedChange={(v) => handleTogglePermission(conn.id, 'can_manage', v)}
-                        />
-                      </TableCell>
+          <div className="py-4 space-y-6">
+            {/* API Connections Section */}
+            <div>
+              <h4 className="text-sm font-semibold mb-3 text-muted-foreground">Conexões de API</h4>
+              {connections.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground text-sm">
+                  Nenhuma conexão de API disponível
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Conexão</TableHead>
+                      <TableHead className="text-center">Visualizar</TableHead>
+                      <TableHead className="text-center">Sincronizar</TableHead>
+                      <TableHead className="text-center">Gerenciar</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+                  </TableHeader>
+                  <TableBody>
+                    {connections.map((conn) => (
+                      <TableRow key={conn.id}>
+                        <TableCell className="font-medium">{conn.name}</TableCell>
+                        <TableCell className="text-center">
+                          <Switch
+                            checked={getPermission(conn.id, 'can_view')}
+                            onCheckedChange={(v) => handleTogglePermission(conn.id, 'can_view', v)}
+                          />
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Switch
+                            checked={getPermission(conn.id, 'can_sync')}
+                            onCheckedChange={(v) => handleTogglePermission(conn.id, 'can_sync', v)}
+                          />
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Switch
+                            checked={getPermission(conn.id, 'can_manage')}
+                            onCheckedChange={(v) => handleTogglePermission(conn.id, 'can_manage', v)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+
+            {/* File Sources Section */}
+            <div>
+              <h4 className="text-sm font-semibold mb-3 text-muted-foreground">Arquivos Importados</h4>
+              {fileSources.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground text-sm">
+                  Nenhum arquivo importado disponível
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Arquivo</TableHead>
+                      <TableHead className="text-center">Visualizar</TableHead>
+                      <TableHead className="text-center">Gerenciar</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {fileSources.map((file) => (
+                      <TableRow key={file.id}>
+                        <TableCell className="font-medium">
+                          <div className="flex flex-col">
+                            <span>{file.name}</span>
+                            <span className="text-xs text-muted-foreground">{file.file_type.toUpperCase()}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Switch
+                            checked={getFilePermission(file.id, 'can_view')}
+                            onCheckedChange={(v) => handleToggleFilePermission(file.id, 'can_view', v)}
+                          />
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Switch
+                            checked={getFilePermission(file.id, 'can_manage')}
+                            onCheckedChange={(v) => handleToggleFilePermission(file.id, 'can_manage', v)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
           </div>
           <DialogFooter>
             <Button onClick={() => setShowPermissionsDialog(false)}>

@@ -891,6 +891,41 @@ export type Database = {
           },
         ]
       }
+      user_file_access: {
+        Row: {
+          can_manage: boolean | null
+          can_view: boolean | null
+          created_at: string | null
+          file_source_id: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          can_manage?: boolean | null
+          can_view?: boolean | null
+          created_at?: string | null
+          file_source_id: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          can_manage?: boolean | null
+          can_view?: boolean | null
+          created_at?: string | null
+          file_source_id?: string
+          id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_file_access_file_source_id_fkey"
+            columns: ["file_source_id"]
+            isOneToOne: false
+            referencedRelation: "file_sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_roles: {
         Row: {
           id: string
