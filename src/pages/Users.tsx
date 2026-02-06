@@ -113,32 +113,35 @@ export default function Users() {
     setIsCreating(true);
 
     try {
-      // Create user via admin API (signup)
-      const { data, error } = await supabase.auth.signUp({
-        email: newEmail,
-        password: newPassword,
-        options: {
-          emailRedirectTo: window.location.origin,
-          data: {
-            full_name: newName,
-          },
-        },
-      });
-
-      if (error) throw error;
-
-      if (data.user && newRole === 'admin') {
-        // Update role to admin if needed
-        const { error: roleError } = await supabase
-          .from('user_roles')
-          .update({ role: 'admin' })
-          .eq('user_id', data.user.id);
-
-        if (roleError) throw roleError;
+      // Get current session token
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error('Sessão não encontrada');
       }
 
-      toast.success('Usuário criado!', {
-        description: 'Um email de confirmação foi enviado.',
+      // Call edge function to create user with admin API
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-user`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          email: newEmail,
+          password: newPassword,
+          full_name: newName,
+          role: newRole,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Erro ao criar usuário');
+      }
+
+      toast.success('Usuário criado com sucesso!', {
+        description: 'O usuário já pode fazer login.',
       });
 
       setShowCreateDialog(false);
