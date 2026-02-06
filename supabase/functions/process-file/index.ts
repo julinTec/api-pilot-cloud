@@ -37,41 +37,36 @@ function parseCSV(content: string): { headers: string[], rows: Record<string, an
   return { headers, rows };
 }
 
-// Parse Parquet content using hyparquet (lightweight, no native deps)
+// Convert values to JSON-safe types (JSON.stringify & JSONB do not support BigInt)
+function toJsonSafe(value: any): any {
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) return value.map(toJsonSafe);
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = toJsonSafe(v);
+    return out;
+  }
+  return value;
+}
+
+// Parse Parquet content using hyparquet (no native deps)
 async function parseParquet(fileData: Blob): Promise<Record<string, any>[]> {
-  const { parquetMetadataAsync, parquetRead } = await import("npm:hyparquet@1.7.1");
-  
+  // Use esm.sh to avoid npm constraint issues in the Edge runtime
+  const { parquetRead } = await import(
+    "https://esm.sh/hyparquet@1.17.6?target=deno"
+  );
+
   const arrayBuffer = await fileData.arrayBuffer();
-  
-  // First get metadata to extract column names
-  const metadata = await parquetMetadataAsync(arrayBuffer);
-  const columnNames = metadata.schema
-    .filter((s: any) => s.name !== 'schema') // Filter out root schema element
-    .map((s: any) => s.name);
-  
-  return new Promise((resolve, reject) => {
+
+  return await new Promise<Record<string, any>[]>((resolve, reject) => {
     try {
+      // `rowFormat: 'object'` returns rows as { columnName: value }
       parquetRead({
         file: arrayBuffer,
-        onComplete: (data: any[][]) => {
-          if (!data || data.length === 0) {
-            resolve([]);
-            return;
-          }
-          
-          const numRows = data[0]?.length || 0;
-          const rows: Record<string, any>[] = [];
-          
-          for (let rowIdx = 0; rowIdx < numRows; rowIdx++) {
-            const row: Record<string, any> = {};
-            for (let colIdx = 0; colIdx < data.length; colIdx++) {
-              const colName = columnNames[colIdx] || `col_${colIdx}`;
-              row[colName] = data[colIdx][rowIdx];
-            }
-            rows.push(row);
-          }
-          resolve(rows);
-        },
+        rowFormat: "object",
+        onComplete: (data: Record<string, any>[]) =>
+          resolve(((data ?? []) as Record<string, any>[]).map((r) => toJsonSafe(r))),
+        onError: (err: unknown) => reject(err),
       });
     } catch (err) {
       reject(err);
