@@ -116,8 +116,7 @@ export default function Endpoints() {
             </div>
           ) : (
             fileSources?.map((file) => {
-              const baseUrl = `${SUPABASE_URL}/functions/v1/api-data?provider=files&endpoint=${file.slug}`;
-              const fullUrl = `${baseUrl}&all=true`;
+              const fullUrl = `${SUPABASE_URL}/functions/v1/api-data?provider=files&endpoint=${file.slug}&all=true`;
               return (
                 <Card key={file.id}>
                   <CardHeader className="pb-2">
@@ -128,12 +127,13 @@ export default function Endpoints() {
                       </span>
                     </CardTitle>
                     <p className="text-sm text-muted-foreground">
-                      {file.description || `${file.records_count?.toLocaleString() || 0} registros • ${file.file_type?.toUpperCase()}`}
+                      {file.records_count?.toLocaleString() || 0} registros • {file.file_type?.toUpperCase()}
+                      {file.description && ` • ${file.description}`}
                     </p>
                   </CardHeader>
-                  <CardContent className="space-y-3">
+                  <CardContent>
                     <div>
-                      <p className="text-xs text-muted-foreground mb-1">URL completa (todos os registros):</p>
+                      <p className="text-xs text-muted-foreground mb-1">URL (retorna 100% dos registros):</p>
                       <div className="flex items-center gap-2">
                         <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{fullUrl}</code>
                         <Button variant="outline" size="icon" onClick={() => copyUrl(fullUrl)} title="Copiar URL">
@@ -143,15 +143,6 @@ export default function Endpoints() {
                           <a href={fullUrl} target="_blank" rel="noopener noreferrer">
                             <ExternalLink className="h-4 w-4" />
                           </a>
-                        </Button>
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">URL base (paginada, máx 1000):</p>
-                      <div className="flex items-center gap-2">
-                        <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{baseUrl}</code>
-                        <Button variant="ghost" size="icon" onClick={() => copyUrl(baseUrl)} title="Copiar URL">
-                          <Copy className="h-4 w-4" />
                         </Button>
                       </div>
                     </div>
