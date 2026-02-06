@@ -1,10 +1,13 @@
 import { PageHeader } from '@/components/ui/page-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Copy, ExternalLink, Info, Database } from 'lucide-react';
+import { Copy, ExternalLink, Info, Database, FileSpreadsheet, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
@@ -20,6 +23,21 @@ const sysEducaEndpoints = [
 ];
 
 export default function Endpoints() {
+  // Fetch file sources with status 'ready'
+  const { data: fileSources, isLoading: isLoadingFiles } = useQuery({
+    queryKey: ['file-sources-ready'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('file_sources')
+        .select('*')
+        .eq('status', 'ready')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
   const copyUrl = (url: string) => {
     navigator.clipboard.writeText(url);
     toast.success('URL copiada!');
@@ -82,6 +100,68 @@ export default function Endpoints() {
           </AccordionContent>
         </AccordionItem>
       </Accordion>
+
+      {/* File Sources Endpoints */}
+      {(isLoadingFiles || (fileSources && fileSources.length > 0)) && (
+        <div className="space-y-4">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <FileSpreadsheet className="h-5 w-5" />
+            Arquivos Importados
+          </h3>
+          
+          {isLoadingFiles ? (
+            <div className="space-y-4">
+              <Skeleton className="h-32 w-full" />
+              <Skeleton className="h-32 w-full" />
+            </div>
+          ) : (
+            fileSources?.map((file) => {
+              const baseUrl = `${SUPABASE_URL}/functions/v1/api-data?provider=files&endpoint=${file.slug}`;
+              const fullUrl = `${baseUrl}&all=true`;
+              return (
+                <Card key={file.id}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center justify-between">
+                      {file.name}
+                      <span className="text-xs font-normal text-muted-foreground bg-muted px-2 py-1 rounded">
+                        files/{file.slug}
+                      </span>
+                    </CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      {file.description || `${file.records_count?.toLocaleString() || 0} registros • ${file.file_type?.toUpperCase()}`}
+                    </p>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1">URL completa (todos os registros):</p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{fullUrl}</code>
+                        <Button variant="outline" size="icon" onClick={() => copyUrl(fullUrl)} title="Copiar URL">
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" asChild title="Abrir no navegador">
+                          <a href={fullUrl} target="_blank" rel="noopener noreferrer">
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
+                        </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1">URL base (paginada, máx 1000):</p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 rounded bg-muted px-3 py-2 font-mono text-xs overflow-x-auto">{baseUrl}</code>
+                        <Button variant="ghost" size="icon" onClick={() => copyUrl(baseUrl)} title="Copiar URL">
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
+        </div>
+      )}
       
       {/* Eskolare Endpoints */}
       <div className="space-y-4">
