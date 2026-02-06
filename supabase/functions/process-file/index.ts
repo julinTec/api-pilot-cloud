@@ -37,40 +37,46 @@ function parseCSV(content: string): { headers: string[], rows: Record<string, an
   return { headers, rows };
 }
 
-// Parse Parquet content using parquetjs
+// Parse Parquet content using hyparquet (lightweight, no native deps)
 async function parseParquet(fileData: Blob): Promise<Record<string, any>[]> {
-  // Dynamic import of parquetjs
-  const parquet = await import("npm:parquetjs@0.11.2");
+  const { parquetMetadataAsync, parquetRead } = await import("npm:hyparquet@1.7.1");
   
   const arrayBuffer = await fileData.arrayBuffer();
-  const buffer = new Uint8Array(arrayBuffer);
   
-  // Write to temp file for parquetjs to read
-  const tempPath = `/tmp/parquet_${Date.now()}.parquet`;
-  await Deno.writeFile(tempPath, buffer);
+  // First get metadata to extract column names
+  const metadata = await parquetMetadataAsync(arrayBuffer);
+  const columnNames = metadata.schema
+    .filter((s: any) => s.name !== 'schema') // Filter out root schema element
+    .map((s: any) => s.name);
   
-  try {
-    // Open parquet file reader
-    const reader = await parquet.ParquetReader.openFile(tempPath);
-    const cursor = reader.getCursor();
-    
-    const rows: Record<string, any>[] = [];
-    let record = null;
-    
-    while ((record = await cursor.next())) {
-      rows.push(record);
-    }
-    
-    await reader.close();
-    return rows;
-  } finally {
-    // Clean up temp file
+  return new Promise((resolve, reject) => {
     try {
-      await Deno.remove(tempPath);
-    } catch {
-      // Ignore cleanup errors
+      parquetRead({
+        file: arrayBuffer,
+        onComplete: (data: any[][]) => {
+          if (!data || data.length === 0) {
+            resolve([]);
+            return;
+          }
+          
+          const numRows = data[0]?.length || 0;
+          const rows: Record<string, any>[] = [];
+          
+          for (let rowIdx = 0; rowIdx < numRows; rowIdx++) {
+            const row: Record<string, any> = {};
+            for (let colIdx = 0; colIdx < data.length; colIdx++) {
+              const colName = columnNames[colIdx] || `col_${colIdx}`;
+              row[colName] = data[colIdx][rowIdx];
+            }
+            rows.push(row);
+          }
+          resolve(rows);
+        },
+      });
+    } catch (err) {
+      reject(err);
     }
-  }
+  });
 }
 
 // Generate slug from name
