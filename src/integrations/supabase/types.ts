@@ -677,6 +677,38 @@ export type Database = {
           },
         ]
       }
+      file_source_data: {
+        Row: {
+          created_at: string | null
+          data: Json
+          file_source_id: string
+          id: string
+          row_index: number
+        }
+        Insert: {
+          created_at?: string | null
+          data?: Json
+          file_source_id: string
+          id?: string
+          row_index: number
+        }
+        Update: {
+          created_at?: string | null
+          data?: Json
+          file_source_id?: string
+          id?: string
+          row_index?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "file_source_data_file_source_id_fkey"
+            columns: ["file_source_id"]
+            isOneToOne: false
+            referencedRelation: "file_sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       file_sources: {
         Row: {
           column_mapping: Json | null
@@ -691,6 +723,7 @@ export type Database = {
           metadata: Json | null
           name: string
           records_count: number | null
+          slug: string | null
           status: string | null
           updated_at: string | null
         }
@@ -707,6 +740,7 @@ export type Database = {
           metadata?: Json | null
           name: string
           records_count?: number | null
+          slug?: string | null
           status?: string | null
           updated_at?: string | null
         }
@@ -723,6 +757,7 @@ export type Database = {
           metadata?: Json | null
           name?: string
           records_count?: number | null
+          slug?: string | null
           status?: string | null
           updated_at?: string | null
         }

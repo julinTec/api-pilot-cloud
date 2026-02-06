@@ -32,18 +32,130 @@ serve(async (req) => {
 
     console.log(`API Request: provider=${provider}, endpoint=${endpoint}, fetchAll=${fetchAll}, limit=${limit}, offset=${offset}`);
 
-    // If no provider specified, return available providers
+    // If no provider specified, return available providers including file sources
     if (!provider) {
       const { data: providers } = await supabase
         .from('api_providers')
         .select('slug, name, description')
         .eq('is_active', true);
 
+      const { data: fileSources } = await supabase
+        .from('file_sources')
+        .select('slug, name, description')
+        .eq('status', 'ready');
+
       return new Response(
         JSON.stringify({
           message: 'Available providers',
           providers,
-          usage: 'GET /api-data?provider={provider}&endpoint={endpoint}',
+          file_sources: fileSources,
+          usage: 'GET /api-data?provider={provider}&endpoint={endpoint} OR GET /api-data?provider=files&endpoint={file_slug}',
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Handle file sources (provider = "files")
+    if (provider === 'files') {
+      if (!endpoint) {
+        // List available file sources
+        const { data: fileSources } = await supabase
+          .from('file_sources')
+          .select('slug, name, description, records_count, file_type')
+          .eq('status', 'ready');
+
+        return new Response(
+          JSON.stringify({
+            provider: 'files',
+            endpoints: fileSources,
+            usage: 'GET /api-data?provider=files&endpoint={file_slug}',
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Get file source by slug
+      const { data: fileSource, error: fileError } = await supabase
+        .from('file_sources')
+        .select('id, name, slug, records_count')
+        .eq('slug', endpoint)
+        .eq('status', 'ready')
+        .maybeSingle();
+
+      if (fileError || !fileSource) {
+        return new Response(
+          JSON.stringify({ 
+            error: `File source '${endpoint}' not found or not ready`,
+            hint: 'Check available file sources using GET /api-data?provider=files'
+          }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Fetch all data if requested
+      if (fetchAll) {
+        const allData: any[] = [];
+        let currentOffset = 0;
+        const batchSize = 1000;
+        let hasMore = true;
+        
+        while (hasMore) {
+          const { data, error } = await supabase
+            .from('file_source_data')
+            .select('row_index, data')
+            .eq('file_source_id', fileSource.id)
+            .order('row_index', { ascending: true })
+            .range(currentOffset, currentOffset + batchSize - 1);
+
+          if (error) throw error;
+
+          if (data && data.length > 0) {
+            allData.push(...data.map(row => ({ row_index: row.row_index, ...row.data })));
+            currentOffset += batchSize;
+            hasMore = data.length === batchSize;
+          } else {
+            hasMore = false;
+          }
+        }
+
+        return new Response(
+          JSON.stringify({
+            provider: 'files',
+            endpoint: fileSource.slug,
+            name: fileSource.name,
+            count: allData.length,
+            all_records: true,
+            data: allData,
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Paginated query
+      const { data, error, count } = await supabase
+        .from('file_source_data')
+        .select('row_index, data', { count: 'exact' })
+        .eq('file_source_id', fileSource.id)
+        .order('row_index', { ascending: true })
+        .range(offset, offset + limit - 1);
+
+      if (error) throw error;
+
+      const flattenedData = data?.map(row => ({ row_index: row.row_index, ...row.data }));
+      const totalCount = count || 0;
+      const hasMoreData = offset + limit < totalCount;
+
+      return new Response(
+        JSON.stringify({
+          provider: 'files',
+          endpoint: fileSource.slug,
+          name: fileSource.name,
+          count: totalCount,
+          limit,
+          offset,
+          has_more: hasMoreData,
+          next_offset: hasMoreData ? offset + limit : null,
+          data: flattenedData,
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -55,7 +167,7 @@ serve(async (req) => {
         .from('api_providers')
         .select('id, name')
         .eq('slug', provider)
-        .single();
+        .maybeSingle();
 
       if (!providerData) {
         return new Response(
