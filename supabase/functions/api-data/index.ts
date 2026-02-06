@@ -1,3 +1,4 @@
+// API Data Edge Function - serves data for Power BI and external consumers
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -94,7 +95,7 @@ serve(async (req) => {
 
       // Fetch all data if requested
       if (fetchAll) {
-        const allData: any[] = [];
+        const allData: Record<string, unknown>[] = [];
         let currentOffset = 0;
         const batchSize = 1000;
         let hasMore = true;
@@ -110,7 +111,7 @@ serve(async (req) => {
           if (error) throw error;
 
           if (data && data.length > 0) {
-            allData.push(...data.map(row => ({ row_index: row.row_index, ...row.data })));
+            allData.push(...data.map(row => ({ row_index: row.row_index, ...row.data as Record<string, unknown> })));
             currentOffset += batchSize;
             hasMore = data.length === batchSize;
           } else {
@@ -141,7 +142,7 @@ serve(async (req) => {
 
       if (error) throw error;
 
-      const flattenedData = data?.map(row => ({ row_index: row.row_index, ...row.data }));
+      const flattenedData = data?.map(row => ({ row_index: row.row_index, ...row.data as Record<string, unknown> }));
       const totalCount = count || 0;
       const hasMoreData = offset + limit < totalCount;
 
@@ -203,7 +204,7 @@ serve(async (req) => {
     if (fetchAll) {
       console.log(`Fetching all records from ${tableName}...`);
       
-      const allData: any[] = [];
+      const allData: Record<string, unknown>[] = [];
       let currentOffset = 0;
       const batchSize = 1000;
       let hasMore = true;
@@ -260,12 +261,12 @@ serve(async (req) => {
 
       // Flatten data for Power BI compatibility
       const flattenedData = allData.map(row => ({
-        id: row.id,
-        external_id: row.external_id,
-        connection_id: row.connection_id,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        ...row.data,
+        id: (row as Record<string, unknown>).id,
+        external_id: (row as Record<string, unknown>).external_id,
+        connection_id: (row as Record<string, unknown>).connection_id,
+        created_at: (row as Record<string, unknown>).created_at,
+        updated_at: (row as Record<string, unknown>).updated_at,
+        ...(row as Record<string, unknown>).data as Record<string, unknown>,
       }));
 
       return new Response(
@@ -347,10 +348,11 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('API Data error:', error);
+    const message = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
