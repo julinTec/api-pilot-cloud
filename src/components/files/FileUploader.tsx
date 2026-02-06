@@ -15,9 +15,11 @@ const defaultAcceptedTypes = [
   '.xlsx',
   '.xls',
   '.csv',
+  '.parquet',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
   'text/csv',
+  'application/octet-stream',
 ];
 
 export function FileUploader({
@@ -46,7 +48,7 @@ export function FileUploader({
     );
 
     if (!isValidType) {
-      setError('Tipo de arquivo não suportado. Use Excel (.xlsx, .xls) ou CSV.');
+      setError('Tipo de arquivo não suportado. Use Excel, CSV ou Parquet.');
       return false;
     }
 
@@ -173,7 +175,7 @@ export function FileUploader({
           Arraste um arquivo ou clique para selecionar
         </p>
         <p className="text-sm text-muted-foreground">
-          Excel (.xlsx, .xls) ou CSV • Máximo {maxSize}MB
+          Excel (.xlsx, .xls), CSV ou Parquet • Máximo {maxSize}MB
         </p>
       </div>
       {error && (
